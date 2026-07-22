@@ -38,10 +38,14 @@ tool → database → persisted result), not breadth of stubs.
 ## Stack (decided — don't swap without asking)
 
 - **Backend:** FastAPI + Jinja2 templates (server-rendered UI, no SPA)
-- **LLM:** Groq (client swappable later behind one interface, but don't build
-  multi-provider abstraction speculatively — YAGNI)
+- **LLM:** Groq via `langchain-groq` (`ChatGroq`) — client swappable later
+  behind LangChain's model interface, but don't build a multi-provider
+  abstraction speculatively — YAGNI
 - **Orchestration:** LangGraph — each agent is a distinct graph node with its
-  own system prompt and own bound tool(s)
+  own system prompt and own bound tool(s). Tools are plain functions wrapped
+  in LangChain's `@tool` decorator (auto-generates the JSON schema from the
+  signature/docstring — don't hand-write tool schemas); tool execution uses
+  LangGraph's prebuilt `ToolNode`, not custom dispatch code.
 - **Database:** PostgreSQL, managed with Alembic migrations
   - Local/judging: `postgres:16` container via `docker-compose.yml`, zero
     external accounts needed to run the repo
