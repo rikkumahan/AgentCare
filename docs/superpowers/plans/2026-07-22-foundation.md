@@ -1185,7 +1185,7 @@ def staff_dashboard(request: Request, user: User = Depends(require_role(UserRole
     return templates.TemplateResponse("staff_dashboard.html", {"request": request, "user": user})
 ```
 
-- [ ] **Step 5: Wire the router into `app/main.py`**
+- [ ] **Step 5: Wire the router into `app/main.py`, add a `/health` route**
 
 ```python
 from fastapi import FastAPI
@@ -1197,7 +1197,15 @@ app = FastAPI(title="AgentCare")
 
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 ```
+
+(Trivial one-liner route — no dedicated unit test needed; Step 10's Docker
+smoke test below is its real check.)
 
 - [ ] **Step 6: Write the failing tests**
 
@@ -1287,21 +1295,30 @@ service as-is):
     volumes:
       - ./storage:/app/storage
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 ```
 
 - [ ] **Step 10: Run the full stack end-to-end and verify it actually serves requests**
 
 ```bash
 docker compose up -d --build
-sleep 5
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/login
+sleep 15
+docker compose ps
+curl -s http://localhost:8000/health
 docker compose down
 ```
 
-Expected: the `curl` line prints `200` — confirms the container built from
-`Dockerfile`, ran `alembic upgrade head` against the `db` service, and
-`uvicorn` served the real `/login` route, all from a clean `docker compose up`
-with no manual steps. This is the judge-facing "does it just run" check.
+Expected: `docker compose ps` shows `app` as `healthy`; the `curl` line
+prints `{"status":"ok"}` — confirms the container built from `Dockerfile`,
+ran `alembic upgrade head` against the `db` service, and `uvicorn` served a
+real route, all from a clean `docker compose up` with no manual steps. This
+is the judge-facing "does it just run" check, and the same `/health`
+endpoint any deployment platform would use as a readiness probe later.
 
 - [ ] **Step 11: Commit**
 
