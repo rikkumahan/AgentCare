@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: agentcare
       POSTGRES_DB: agentcare
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
