@@ -1223,7 +1223,8 @@ def test_registered_patient_can_view_own_dashboard():
     )
     cookie = resp.cookies.get("agentcare_session")
 
-    dash = client.get("/dashboard", cookies={"agentcare_session": cookie})
+    client.cookies.set("agentcare_session", cookie)
+    dash = client.get("/dashboard")
     assert dash.status_code == 200
     assert "Dana" in dash.text
 
@@ -1237,11 +1238,18 @@ def test_patient_cannot_access_staff_dashboard():
     )
     cookie = resp.cookies.get("agentcare_session")
 
-    staff_resp = client.get("/staff/dashboard", cookies={"agentcare_session": cookie})
+    client.cookies.set("agentcare_session", cookie)
+    staff_resp = client.get("/staff/dashboard")
     assert staff_resp.status_code == 403
 
 
 def test_unauthenticated_request_gets_401():
+    # module-level `client` is a stateful TestClient whose cookie jar
+    # persists Set-Cookie headers from earlier tests' /register and
+    # /login calls, so a bare client.get() here would silently carry a
+    # leftover session cookie. Clear it to actually test the
+    # unauthenticated path rather than an accidental leftover-auth path.
+    client.cookies.clear()
     resp = client.get("/dashboard")
     assert resp.status_code == 401
 
@@ -1260,11 +1268,12 @@ def test_staff_user_can_access_staff_dashboard_but_not_patient_dashboard(db_sess
     assert login_resp.headers["location"] == "/staff/dashboard"
     cookie = login_resp.cookies.get("agentcare_session")
 
-    staff_dash = client.get("/staff/dashboard", cookies={"agentcare_session": cookie})
+    client.cookies.set("agentcare_session", cookie)
+    staff_dash = client.get("/staff/dashboard")
     assert staff_dash.status_code == 200
     assert "Frank Staff" in staff_dash.text
 
-    patient_dash = client.get("/dashboard", cookies={"agentcare_session": cookie})
+    patient_dash = client.get("/dashboard")
     assert patient_dash.status_code == 403
 ```
 
