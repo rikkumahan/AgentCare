@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Staff Dashboard - AgentCare{% endblock %}
+{% block content %}
+<h1>Staff Dashboard — {{ user.name }}</h1>
+<p>Role: {{ user.role.value }}</p>
+<form method="post" action="/logout"><button type="submit">Log out</button></form>
+{% endblock %}

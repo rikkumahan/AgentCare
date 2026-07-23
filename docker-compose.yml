@@ -15,5 +15,30 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    env_file: .env
+    environment:
+      # Overrides .env's DATABASE_URL: that value is for host-side tools
+      # (pytest, alembic run directly on the host) reaching the container
+      # via its published host port. From inside the app container, the
+      # db service is reachable by its Compose service name and internal
+      # container port instead, regardless of any host-side port mapping.
+      DATABASE_URL: postgresql+psycopg://agentcare:agentcare@db:5432/agentcare
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   db_data:

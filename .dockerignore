@@ -1,0 +1,11 @@
+.env
+.git
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+storage/
+docker-compose.override.yml
+.remember/
+*.db
