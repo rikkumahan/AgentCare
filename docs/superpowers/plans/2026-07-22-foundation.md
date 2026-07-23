@@ -938,7 +938,7 @@ templates = Jinja2Templates(directory="app/templates")
 
 @router.get("/register", response_class=HTMLResponse)
 def register_form(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request, "error": None})
+    return templates.TemplateResponse(request, "register.html", {"error": None})
 
 
 @router.post("/register")
@@ -952,8 +952,9 @@ def register_submit(
     existing = db.query(User).filter(User.email == email).first()
     if existing:
         return templates.TemplateResponse(
+            request,
             "register.html",
-            {"request": request, "error": "Email already registered"},
+            {"error": "Email already registered"},
             status_code=400,
         )
 
@@ -971,7 +972,7 @@ def register_submit(
 
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    return templates.TemplateResponse(request, "login.html", {"error": None})
 
 
 @router.post("/login")
@@ -984,8 +985,9 @@ def login_submit(
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(
+            request,
             "login.html",
-            {"request": request, "error": "Invalid email or password"},
+            {"error": "Invalid email or password"},
             status_code=400,
         )
 
@@ -1177,12 +1179,12 @@ templates = Jinja2Templates(directory="app/templates")
 
 @router.get("/dashboard", response_class=HTMLResponse)
 def patient_dashboard(request: Request, user: User = Depends(require_role(UserRole.patient.value))):
-    return templates.TemplateResponse("dashboard.html", {"request": request, "user": user})
+    return templates.TemplateResponse(request, "dashboard.html", {"user": user})
 
 
 @router.get("/staff/dashboard", response_class=HTMLResponse)
 def staff_dashboard(request: Request, user: User = Depends(require_role(UserRole.staff.value))):
-    return templates.TemplateResponse("staff_dashboard.html", {"request": request, "user": user})
+    return templates.TemplateResponse(request, "staff_dashboard.html", {"user": user})
 ```
 
 - [ ] **Step 5: Wire the router into `app/main.py`, add a `/health` route**
