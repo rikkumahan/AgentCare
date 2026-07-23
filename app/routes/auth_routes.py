@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.auth import create_session_token, hash_password, verify_password
+from app.config import settings
 from app.db import get_db
 from app.models import PatientProfile, User, UserRole
 from app.rbac import SESSION_COOKIE_NAME
@@ -42,7 +43,7 @@ def register_submit(
 
     token = create_session_token(str(user.id))
     response = RedirectResponse(url="/dashboard", status_code=303)
-    response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
+    response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax", secure=settings.env != "dev")
     return response
 
 
@@ -70,7 +71,7 @@ def login_submit(
     token = create_session_token(str(user.id))
     dest = "/staff/dashboard" if user.role == UserRole.staff else "/dashboard"
     response = RedirectResponse(url=dest, status_code=303)
-    response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
+    response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax", secure=settings.env != "dev")
     return response
 
 

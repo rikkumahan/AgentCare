@@ -1,9 +1,3 @@
-import os
-
-# Local port-conflict workaround for this machine only (native Windows Postgres holds 5432); a fresh clone without the conflict should use 5432, matching .env.example.
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://agentcare:agentcare@localhost:5433/agentcare")
-os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-prod")
-
 import pytest
 from sqlalchemy import text
 
