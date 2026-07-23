@@ -7,7 +7,9 @@ from app.models import AuditEvent
 
 
 def test_audited_writes_audit_event_on_success(db_session):
-    @audited("dummy_action", "DummyEntity")
+    action = f"dummy_action-{uuid.uuid4().hex[:8]}"
+
+    @audited(action, "DummyEntity")
     def _dummy(db, x):
         return {"id": str(uuid.uuid4()), "x": x}
 
@@ -15,7 +17,7 @@ def test_audited_writes_audit_event_on_success(db_session):
 
     events = (
         db_session.query(AuditEvent)
-        .filter(AuditEvent.action == "dummy_action", AuditEvent.entity_type == "DummyEntity")
+        .filter(AuditEvent.action == action, AuditEvent.entity_type == "DummyEntity")
         .all()
     )
     assert len(events) == 1
@@ -24,7 +26,9 @@ def test_audited_writes_audit_event_on_success(db_session):
 
 
 def test_audited_writes_audit_event_on_failure_and_reraises(db_session):
-    @audited("dummy_failure", "DummyEntity")
+    action = f"dummy_failure-{uuid.uuid4().hex[:8]}"
+
+    @audited(action, "DummyEntity")
     def _dummy(db):
         raise ValueError("boom")
 
@@ -33,7 +37,7 @@ def test_audited_writes_audit_event_on_failure_and_reraises(db_session):
 
     events = (
         db_session.query(AuditEvent)
-        .filter(AuditEvent.action == "dummy_failure", AuditEvent.entity_type == "DummyEntity")
+        .filter(AuditEvent.action == action, AuditEvent.entity_type == "DummyEntity")
         .all()
     )
     assert len(events) == 1
