@@ -64,6 +64,22 @@ def test_safety_capture_node_sets_escalation_from_tool_message():
     assert update == {"escalation": {"id": "e1", "reason": "describes an emergency", "status": "open"}}
 
 
+def test_safety_capture_node_fails_closed_on_malformed_tool_call():
+    tool_message = ToolMessage(
+        content="Error: 1 validation error for create_escalation_tool\nreason\n  Field required",
+        artifact=None,
+        tool_call_id="call_1",
+        name="create_escalation_tool",
+        status="error",
+    )
+    state = _safety_state(messages=[tool_message])
+
+    update = safety_capture_node(state, config={"configurable": {}})
+
+    assert update["escalation"] is not None
+    assert update["escalation"]["status"] == "open"
+
+
 def test_safety_agent_node_returns_no_escalation_for_safe_request(monkeypatch):
     fake_model = FakeToolCallingModel([ai_message_text("SAFE")])
     monkeypatch.setattr("app.agents.safety.get_llm", lambda: fake_model)

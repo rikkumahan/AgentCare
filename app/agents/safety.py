@@ -40,7 +40,16 @@ def safety_llm_node(state: SafetyState, config):
 def safety_capture_node(state: SafetyState, config):
     last = state["messages"][-1]
     if isinstance(last, ToolMessage) and last.name == "create_escalation_tool":
-        return {"escalation": last.artifact}
+        if last.artifact is not None:
+            return {"escalation": last.artifact}
+        # ToolNode caught a validation error before the tool ran (artifact is
+        # None) — fail closed rather than silently treating this as safe.
+        return {
+            "escalation": {
+                "reason": f"create_escalation_tool call failed validation: {last.content}",
+                "status": "open",
+            }
+        }
     return {}
 
 

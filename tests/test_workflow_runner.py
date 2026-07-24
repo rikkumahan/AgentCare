@@ -27,6 +27,7 @@ def test_emergency_request_ends_needs_review_with_escalation_row(monkeypatch, db
 
     assert workflow_run.status == WorkflowStatus.needs_review
     assert workflow_run.current_step == "safety_agent"
+    assert workflow_run.state["status"] == "needs_review"
 
     escalation = db_session.query(Escalation).filter(Escalation.workflow_run_id == workflow_run.id).one()
     assert "chest pain" in escalation.reason
@@ -61,6 +62,7 @@ def test_administrative_request_reaches_routing_boundary_with_intent_set(monkeyp
 
     assert workflow_run.status == WorkflowStatus.running
     assert workflow_run.current_step == "routing_agent"
+    assert workflow_run.state["status"] == "running"
     assert workflow_run.state["intent"] == "book_appointment"
     assert workflow_run.state["patient_id"] is not None
     assert workflow_run.state["escalation"] is None

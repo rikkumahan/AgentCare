@@ -49,6 +49,7 @@ def run_workflow(
                 db.commit()
     except Exception as exc:
         workflow_run.status = WorkflowStatus.failed
+        full_state["status"] = WorkflowStatus.failed.value
         workflow_run.state = {**full_state, "error": str(exc)}
         db.commit()
         return workflow_run
@@ -59,6 +60,7 @@ def run_workflow(
         workflow_run.status = WorkflowStatus.running
         workflow_run.current_step = "routing_agent"
 
+    full_state["status"] = workflow_run.status.value
     workflow_run.state = dict(full_state)
     db.commit()
     return workflow_run
