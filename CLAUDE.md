@@ -4,6 +4,26 @@ This file is the authoritative brief for anyone (human or agent) working in this
 repo. Read it before touching code. It reflects decisions already made during
 design — don't re-litigate them without the user's sign-off.
 
+## Also read: `docs/memory/`
+
+This file holds static rules that don't change. It does **not** capture
+decisions made *while building* (with the reasoning behind them), known
+environment gotchas, or current phase status — that lives in
+`docs/memory/` and gets read alongside this file, not instead of it:
+
+- [`docs/memory/decisions.md`](docs/memory/decisions.md) — architectural
+  calls made during implementation and why, so they aren't re-litigated or
+  accidentally reversed
+- [`docs/memory/gotchas.md`](docs/memory/gotchas.md) — environment/tooling
+  quirks that already cost debugging time once — check before rediscovering
+- [`docs/memory/status.md`](docs/memory/status.md) — which phase is
+  actually done vs. just planned, at a glance
+
+**Keep it updated.** When a session makes a non-obvious decision, hits a
+gotcha worth remembering, or finishes/starts a phase, add a few lines to
+the relevant file before wrapping up — this folder is only useful if it
+stays current.
+
 ## What this is
 
 AgentCare, a submission for the **AgentCare Build Challenge 2026** (see
