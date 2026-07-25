@@ -58,7 +58,7 @@ def run_workflow(
         workflow_run.status = WorkflowStatus.needs_review
     else:
         workflow_run.status = WorkflowStatus.running
-        workflow_run.current_step = "routing_agent"
+        workflow_run.current_step = "document_agent"
 
     full_state["status"] = workflow_run.status.value
     workflow_run.state = dict(full_state)

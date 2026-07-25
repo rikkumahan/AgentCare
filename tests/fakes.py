@@ -1,8 +1,18 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from langchain_core.messages import AIMessage
 
-from app.models import PatientProfile, User, UserRole, WorkflowRun
+from app.models import (
+    AppointmentSlot,
+    Department,
+    Doctor,
+    PatientProfile,
+    SlotStatus,
+    User,
+    UserRole,
+    WorkflowRun,
+)
 
 
 def make_user(db_session, role=UserRole.patient) -> User:
@@ -24,6 +34,46 @@ def make_patient_profile(db_session, user: User | None = None) -> PatientProfile
     db_session.add(profile)
     db_session.commit()
     return profile
+
+
+def make_department(db_session, name: str | None = None, active: bool = True) -> Department:
+    department = Department(
+        name=name or f"Dept-{uuid.uuid4().hex[:8]}",
+        description="Test department",
+        active=active,
+    )
+    db_session.add(department)
+    db_session.commit()
+    return department
+
+
+def make_doctor(db_session, department: Department | None = None, active: bool = True) -> Doctor:
+    if department is None:
+        department = make_department(db_session)
+    doctor = Doctor(department_id=department.id, name=f"Dr. Test-{uuid.uuid4().hex[:8]}", active=active)
+    db_session.add(doctor)
+    db_session.commit()
+    return doctor
+
+
+def make_appointment_slot(
+    db_session,
+    doctor: Doctor | None = None,
+    start_time: datetime | None = None,
+    status: SlotStatus = SlotStatus.open,
+) -> AppointmentSlot:
+    if doctor is None:
+        doctor = make_doctor(db_session)
+    start_time = start_time or (datetime.now(timezone.utc) + timedelta(days=1))
+    slot = AppointmentSlot(
+        doctor_id=doctor.id,
+        start_time=start_time,
+        end_time=start_time + timedelta(minutes=30),
+        status=status,
+    )
+    db_session.add(slot)
+    db_session.commit()
+    return slot
 
 
 def make_workflow_run(db_session, profile: PatientProfile | None = None) -> WorkflowRun:

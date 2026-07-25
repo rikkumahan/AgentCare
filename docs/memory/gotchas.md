@@ -51,6 +51,29 @@ something else already owns 5432 before assuming the compose file is wrong.
 pins `bcrypt<5` accordingly (foundation phase). Don't let a dependency
 upgrade silently bump past it.
 
+## `monkeypatch.setattr(..., lambda: FakeToolCallingModel([...]))` silently infinite-loops
+
+Construct the mock **before** the `setattr` call and close over that instance
+(`model = FakeToolCallingModel([...]); monkeypatch.setattr("...get_llm", lambda: model)`).
+Never construct it inline in the lambda.
+
+**Symptom:** `langgraph.errors.GraphRecursionError: Recursion limit of ... reached`,
+with the failing node stuck on whichever agent's subgraph loops more than
+once per run (Coordinator/Routing/Appointment — anything with a
+tool-call loop; Safety never loops so it happens to tolerate the mistake).
+
+**Why:** any agent whose subgraph node calls `get_llm()` on every loop
+iteration will, with an inline lambda, get a **brand-new** mock each call —
+its response queue resets to item #1 every time, so the scripted
+second/third response (the one that ends the loop) is never reached.
+
+**Fix:** always `model = FakeToolCallingModel([...])` first, then
+`monkeypatch.setattr(target, lambda: model)`. Confirmed by an actual failing
+test run during Phase 3 (`docs/superpowers/plans/2026-07-25-routing-appointment-agents.md`,
+Task 5) — this cost real debugging time (recursion-limit errors don't show
+which mock caused them; had to add tracing to `coordinator_llm_node` to see
+the model was being reconstructed fresh every call).
+
 ## Tampering the *last* character of a signed token is flaky
 
 `itsdangerous` tokens are base64url-encoded; the final character(s) of a

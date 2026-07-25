@@ -79,6 +79,65 @@ procedure would bypass both.
 **How to apply:** if a specific hot path genuinely needs it later, that's
 a deliberate, separately-justified addition — not a default to reach for.
 
+## Routing's escalation bypasses Safety's LLM node entirely
+
+When Department Routing can't confidently match a request to a department,
+`routing_agent_node` calls the plain `create_escalation()` function directly
+(the same audited function Safety's tool uses) instead of looping back into
+the `safety_agent` node.
+
+**Why:** looping back into `safety_agent` risks an infinite cycle — the
+same unroutable request would go safety → coordinator → routing → safety →
+coordinator → routing… forever, since nothing about the request changes
+between passes. It would also wrongly couple Routing's failure mode into
+Safety's diagnosis/emergency-focused prompt. "No confident department
+match" is a deterministic outcome, not a judgment call, so it doesn't need
+a second LLM turn at all.
+
+**How to apply:** any future agent that can fail to resolve something
+(Document's missing-doc detection, Follow-up's stale-workflow scan) should
+follow the same shape if it needs to escalate: call `create_escalation`
+directly from the agent's own parent-facing wrapper, not by routing back
+through Safety's node.
+
+## Coordinator's final confirmation call stays deferred through Phase 3
+
+Per the design spec, Coordinator's second LLM call (reading back
+`Appointment`/`PatientDocument`/`Reminder` rows and rendering a real
+confirmation) only fires "after all other nodes succeed" — which isn't
+true yet with only Routing+Appointment built. Phase 3 ends a successful run
+with structured `WorkflowState` only; no agent asserts success in free text.
+
+**Why:** there's no UI yet (that's Phase 6) to show a confirmation to, and
+building partial finalize logic now means rewriting it twice more once
+Document/Follow-up add the rows it needs to read. Also avoids the CLAUDE.md
+hard rule against hardcoded final responses by construction — nothing
+asserts success until there's something complete to read back.
+
+**How to apply:** wire the real finalize call once Document and/or
+Follow-up exist, reading back whatever rows exist at that point.
+
+## Test data that persists across a whole pytest session needs scoped assertions
+
+`db_session` doesn't roll back between tests (established in Phase 2's
+review — see the uniqueness note below). Phase 3 hit two flavors of the
+same underlying issue: (1) a UNIQUE-constrained column (`Department.name`)
+needs a fresh value per test, not a shared literal; (2) any assertion
+against an *unscoped* query (a bare `.count()`, an exact `len(result)`, an
+exact `names == {...}` set) silently accumulates rows from every other test
+in the same session and breaks once enough other tests have run first.
+
+**Why:** caught by actually running the Phase 3 tests against the real
+Postgres DB rather than trusting a read-through — `lookup_departments`'s
+own tests failed on a UNIQUE-constraint collision, and a `book_or_modify_appointment`
+count assertion failed once other tests had already booked real
+appointments in the same session.
+
+**How to apply:** any query with no natural per-test scoping key (patient
+id, workflow_run id, a uuid-suffixed name) must have its result asserted by
+membership ("does this id appear/not appear") — never an absolute count or
+exact set. See `docs/memory/gotchas.md` for the specific fix pattern.
+
 ## Building directly on `master`, no feature branches or worktrees
 
 Both Phase 1 (foundation) and Phase 2 (core agent loop) were implemented
