@@ -26,10 +26,25 @@ slot flipped to `booked`) and ends with `status=running`,
 Coordinator's final confirmation-rendering call is still deferred (no UI
 exists yet to show it to); see `docs/memory/decisions.md`.
 
-64/64 tests passing as of the Phase 3 work (branch `master`, no
-feature branches/worktrees in use, no remote configured yet). Two real
-bugs were caught only by actually running the tests against the live
-Postgres DB, not by reading the plan: a backwards substring check in
-`lookup_departments`'s hint matching, and a `monkeypatch.setattr(...,
-lambda: FakeToolCallingModel([...]))` mock-construction mistake that
-caused a silent `GraphRecursionError` (see `docs/memory/gotchas.md`).
+Ahead of Phase 6, one real (not styled) route now exists so the agent
+workflow is reachable through an actual HTTP request, not just pytest/manual
+scripts: `GET/POST /requests/new` and `GET /requests/{workflow_run_id}`
+(`app/routes/request_routes.py`), patient-only, plain unstyled templates.
+See `docs/superpowers/specs/2026-07-25-request-routes-design.md` and
+`docs/superpowers/plans/2026-07-25-request-routes.md` — built early and
+deliberately, not deferred to Phase 6, because CLAUDE.md's top judging
+criterion is the full route→agent→DB chain, and that chain had never been
+proven outside direct Python calls until this route existed. Phase 6 still
+owns styling, a request-history list, file upload, reschedule/cancel, and
+staff-facing routes — none of that is here.
+
+69/69 tests passing as of this work (branch `master`, no feature
+branches/worktrees in use, no remote configured yet). Real bugs were caught
+only by actually running things, not by reading the plan: in Phase 3, a
+backwards substring check in `lookup_departments`'s hint matching and a
+`monkeypatch.setattr(..., lambda: FakeToolCallingModel([...]))`
+mock-construction mistake that caused a silent `GraphRecursionError` (see
+`docs/memory/gotchas.md`); before writing the routes plan, a manual check of
+`db.get(WorkflowRun, <string-id>)` and the `patient_id == profile.id`
+ownership comparison against the real DB, confirming both work before
+committing to the plan.

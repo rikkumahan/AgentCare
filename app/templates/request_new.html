@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}New Request - AgentCare{% endblock %}
+{% block content %}
+<h1>Submit a request</h1>
+<form method="post" action="/requests/new">
+    <textarea name="request_text" rows="4" cols="50" required placeholder="e.g. book a cardiology appointment"></textarea>
+    <br>
+    <button type="submit">Submit</button>
+</form>
+{% endblock %}

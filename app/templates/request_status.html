@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Request Status - AgentCare{% endblock %}
+{% block content %}
+<h1>Request Status</h1>
+<p>Status: {{ workflow_run.status.value }}</p>
+<p>Current step: {{ workflow_run.current_step }}</p>
+<ul>
+    <li>Intent: {{ workflow_run.state.get("intent") }}</li>
+    <li>Department: {{ workflow_run.state.get("department_id") }}</li>
+    <li>Appointment: {{ workflow_run.state.get("appointment_id") }}</li>
+    <li>Escalation: {{ workflow_run.state.get("escalation") }}</li>
+</ul>
+<a href="/requests/new">Submit another request</a>
+{% endblock %}
