@@ -1,5 +1,6 @@
 import uuid
 
+from app.db import SessionLocal
 from app.graph import build_graph
 from app.models import WorkflowRun, WorkflowStatus
 
@@ -37,7 +38,14 @@ def run_workflow(
         "status": "running",
     }
 
-    config = {"configurable": {"db": db}}
+    # SessionLocal (the scoped_session registry), not the resolved db
+    # instance: tool calls run inside ToolNode's own worker thread, and
+    # scoped_session hands that thread its own session transparently. When
+    # called from the same thread as run_workflow (agent node functions,
+    # and this function's own bookkeeping below), it resolves to the exact
+    # same session as `db` - no behavior change there, just thread-safety
+    # for the tool-execution thread.
+    config = {"configurable": {"db": SessionLocal}}
     full_state = dict(initial_state)
 
     try:

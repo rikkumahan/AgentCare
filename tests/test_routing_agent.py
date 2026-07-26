@@ -83,6 +83,28 @@ def test_routing_agent_node_resolves_department_id_by_name(monkeypatch, db_sessi
     assert "escalation" not in update
 
 
+def test_routing_agent_node_resolves_department_id_from_close_but_inexact_reply(monkeypatch, db_session):
+    dept_name = f"Cardiology {uuid.uuid4().hex[:8]}"
+    department = make_department(db_session, name=dept_name)
+    fake_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "cardiology"}),
+            # Real Groq models sometimes echo a paraphrase like "X
+            # Department" instead of the bare name, despite being told to
+            # reply with only the exact name - confirmed against the real
+            # API, not a hypothetical. Resolution must tolerate this.
+            ai_message_text(f"{dept_name} Department"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: fake_model)
+
+    state = workflow_state(request_text="I need a cardiology checkup")
+    update = routing_agent_node(state, config={"configurable": {"db": db_session}})
+
+    assert update["department_id"] == str(department.id)
+    assert "escalation" not in update
+
+
 def test_routing_agent_node_escalates_when_unmatched(monkeypatch, db_session):
     workflow_run = make_workflow_run(db_session)
     make_department(db_session, name=f"Cardiology {uuid.uuid4().hex[:8]}")

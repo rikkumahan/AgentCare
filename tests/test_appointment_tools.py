@@ -40,6 +40,25 @@ def test_check_slot_availability_respects_date_window(db_session):
     assert result == []
 
 
+def test_book_or_modify_appointment_rejects_malformed_slot_id(db_session):
+    profile = make_patient_profile(db_session)
+
+    result = book_or_modify_appointment(db_session, str(profile.id), "not-a-real-uuid", "book", None)
+
+    assert result["status"] == "error"
+    assert "not a valid slot id" in result["error"]
+
+
+def test_book_or_modify_appointment_rejects_malformed_existing_appointment_id(db_session):
+    profile = make_patient_profile(db_session)
+    slot = make_appointment_slot(db_session)
+
+    result = book_or_modify_appointment(db_session, str(profile.id), str(slot.id), "cancel", "not-a-real-uuid")
+
+    assert result["status"] == "error"
+    assert "not a valid appointment id" in result["error"]
+
+
 def test_book_or_modify_appointment_books_open_slot(db_session):
     profile = make_patient_profile(db_session)
     slot = make_appointment_slot(db_session)

@@ -74,6 +74,13 @@ def _conflicting_appointment(
     return query.first()
 
 
+def _parse_uuid(value: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 @audited("book_or_modify_appointment", "Appointment")
 def book_or_modify_appointment(
     db: Session,
@@ -85,7 +92,10 @@ def book_or_modify_appointment(
     if action == "cancel":
         if not existing_appointment_id:
             return {"id": None, "status": "error", "error": "cancel requires existing_appointment_id"}
-        appointment = db.query(Appointment).filter(Appointment.id == uuid.UUID(existing_appointment_id)).first()
+        existing_uuid = _parse_uuid(existing_appointment_id)
+        if existing_uuid is None:
+            return {"id": None, "status": "error", "error": f"'{existing_appointment_id}' is not a valid appointment id"}
+        appointment = db.query(Appointment).filter(Appointment.id == existing_uuid).first()
         if appointment is None:
             return {"id": None, "status": "error", "error": f"Appointment {existing_appointment_id} not found"}
         old_slot = db.query(AppointmentSlot).filter(AppointmentSlot.id == appointment.slot_id).first()
@@ -95,7 +105,10 @@ def book_or_modify_appointment(
         db.commit()
         return _appointment_dict(appointment, old_slot)
 
-    slot = db.query(AppointmentSlot).filter(AppointmentSlot.id == uuid.UUID(slot_id)).first()
+    slot_uuid = _parse_uuid(slot_id)
+    if slot_uuid is None:
+        return {"id": None, "status": "error", "error": f"'{slot_id}' is not a valid slot id"}
+    slot = db.query(AppointmentSlot).filter(AppointmentSlot.id == slot_uuid).first()
     if slot is None:
         return {"id": None, "status": "error", "error": f"Slot {slot_id} not found"}
     if slot.status != SlotStatus.open:
@@ -124,7 +137,10 @@ def book_or_modify_appointment(
     if action == "reschedule":
         if not existing_appointment_id:
             return {"id": None, "status": "error", "error": "reschedule requires existing_appointment_id"}
-        appointment = db.query(Appointment).filter(Appointment.id == uuid.UUID(existing_appointment_id)).first()
+        existing_uuid = _parse_uuid(existing_appointment_id)
+        if existing_uuid is None:
+            return {"id": None, "status": "error", "error": f"'{existing_appointment_id}' is not a valid appointment id"}
+        appointment = db.query(Appointment).filter(Appointment.id == existing_uuid).first()
         if appointment is None:
             return {"id": None, "status": "error", "error": f"Appointment {existing_appointment_id} not found"}
 

@@ -4,7 +4,6 @@ from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from sqlalchemy import func
 
 from app.agents.state import WorkflowState
 from app.llm import get_llm, invoke_with_retry
@@ -96,14 +95,23 @@ def routing_agent_node(state: WorkflowState, config) -> dict:
 
     department_id = None
     if department_name:
-        department = (
-            db.query(Department)
-            .filter(func.lower(Department.name) == department_name.strip().lower())
-            .filter(Department.active.is_(True))
-            .first()
-        )
-        if department is not None:
-            department_id = str(department.id)
+        normalized_reply = department_name.strip().lower()
+        candidates = db.query(Department).filter(Department.active.is_(True)).all()
+        # Prefer an exact match; fall back to substring containment either
+        # direction. A real LLM sometimes echoes "Cardiology Department"
+        # instead of the bare name "Cardiology" despite being told to reply
+        # with only the exact name - confirmed against the real Groq API,
+        # not a hypothetical. Still never trusts an LLM-transcribed id.
+        for candidate in candidates:
+            if candidate.name.strip().lower() == normalized_reply:
+                department_id = str(candidate.id)
+                break
+        else:
+            for candidate in candidates:
+                candidate_name = candidate.name.strip().lower()
+                if candidate_name in normalized_reply or normalized_reply in candidate_name:
+                    department_id = str(candidate.id)
+                    break
 
     if department_id is None:
         escalation = create_escalation(
