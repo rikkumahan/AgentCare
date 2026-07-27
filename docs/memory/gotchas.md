@@ -213,6 +213,44 @@ registry, never a resolved `db`/`Session` instance, regardless of where that
 writing or reviewing any new code that calls an existing agent node function
 directly (outside the main graph's own `stream()` call), check this first.
 
+## `AppointmentStatus.rescheduled` is easy to leave out of "is this appointment active" filters
+
+**Symptom:** none yet in production — caught during a spec cross-check
+(2026-07-27) across three call sites at once, before two of them were even
+built.
+
+**Why:** `book_or_modify_appointment`'s "reschedule" action (`app/tools/appointment_tools.py`)
+does not create a new `Appointment` row and does not flip status back to
+`confirmed` — it mutates the *same* row's `slot_id`/`doctor_id` and sets
+`status = AppointmentStatus.rescheduled` permanently. So `rescheduled` reads
+like a terminal/inactive status (similar to `cancelled`) but actually means
+"still a real, active, upcoming appointment — just moved." Any query meant
+to answer "does this patient have an active appointment [in this
+department]" that filters `status.in_([pending, confirmed])` or
+`status == confirmed` silently drops every rescheduled appointment.
+
+**Where this bit (or almost bit) three places:** `_conflicting_appointment`
+(pre-existing Phase 3 code — a rescheduled appointment didn't block a new
+overlapping booking, a real double-booking risk, fixed with a regression
+test); the Document agent spec's `_missing_required_documents` (a patient
+whose only relevant appointment was rescheduled would wrongly show no
+missing-document gap); the Follow-up agent spec's appointment-reminder scan
+(a rescheduled appointment would never get a reminder at all). All three
+were the exact same underlying gap, caught in one cross-check pass because
+the fix to the first two call sites was checked against the third instead
+of assumed independent.
+
+**Fix:** `status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed,
+AppointmentStatus.rescheduled])` — equivalently, "anything except
+`cancelled`" — everywhere "does this patient have an active appointment"
+is the real question being asked.
+
+**How to apply:** any new code that filters `Appointment.status` to mean
+"still active"/"not gone" must include `rescheduled`, not just
+`pending`/`confirmed`. Grep for `AppointmentStatus\.(pending|confirmed)` when
+adding a new query like this and check whether `rescheduled` should be in
+the list too — it almost always should, since it isn't a cancellation.
+
 ## Tampering the *last* character of a signed token is flaky
 
 `itsdangerous` tokens are base64url-encoded; the final character(s) of a

@@ -65,7 +65,11 @@ def _conflicting_appointment(
         db.query(Appointment)
         .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
         .filter(Appointment.patient_id == uuid.UUID(patient_id))
-        .filter(Appointment.status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]))
+        .filter(
+            Appointment.status.in_(
+                [AppointmentStatus.pending, AppointmentStatus.confirmed, AppointmentStatus.rescheduled]
+            )
+        )
         .filter(AppointmentSlot.start_time < slot.end_time)
         .filter(AppointmentSlot.end_time > slot.start_time)
     )

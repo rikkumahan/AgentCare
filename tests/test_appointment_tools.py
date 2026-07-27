@@ -104,6 +104,33 @@ def test_book_or_modify_appointment_rejects_conflicting_booking(db_session):
     assert "conflicting" in second["error"]
 
 
+def test_book_or_modify_appointment_conflict_check_includes_rescheduled_appointments(db_session):
+    # Regression test: _conflicting_appointment previously only checked
+    # pending/confirmed, missing "rescheduled" - a status that looks
+    # terminal but actually means the appointment is still active, just
+    # moved to a new slot (it never flips back to "confirmed"). A
+    # rescheduled appointment must still block a new overlapping booking.
+    profile = make_patient_profile(db_session)
+    doctor = make_doctor(db_session)
+    start = datetime.now(timezone.utc) + timedelta(days=2)
+    original_slot = make_appointment_slot(db_session, doctor=doctor, start_time=start)
+    rescheduled_slot = make_appointment_slot(db_session, doctor=doctor, start_time=start + timedelta(days=1))
+    overlapping_slot = make_appointment_slot(
+        db_session, doctor=doctor, start_time=start + timedelta(days=1, minutes=10)
+    )
+
+    booked = book_or_modify_appointment(db_session, str(profile.id), str(original_slot.id), "book", None)
+    rescheduled = book_or_modify_appointment(
+        db_session, str(profile.id), str(rescheduled_slot.id), "reschedule", booked["id"]
+    )
+    assert rescheduled["status"] == "rescheduled"
+
+    result = book_or_modify_appointment(db_session, str(profile.id), str(overlapping_slot.id), "book", None)
+
+    assert result["status"] == "error"
+    assert "conflicting" in result["error"]
+
+
 def test_book_or_modify_appointment_reschedule_frees_old_slot_and_books_new(db_session):
     profile = make_patient_profile(db_session)
     old_slot = make_appointment_slot(db_session)

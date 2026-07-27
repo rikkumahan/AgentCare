@@ -102,13 +102,18 @@ def store_and_classify_document(db: Session, patient_id: str, file_path: str, do
 
 def _missing_required_documents(db: Session, patient_id: str) -> list[str]:
     """Real query: patient's appointments (filtered to
-    status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]) -
-    a cancelled appointment's department shouldn't keep flagging the patient
-    for paperwork tied to a visit that isn't happening) -> distinct
-    departments -> union of required_document_types, minus the
-    document_types the patient already has on file. Shared by this tool and
-    the Follow-up agent's scan (same gap, two different callers/contexts) -
-    not duplicated logic."""
+    status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed,
+    AppointmentStatus.rescheduled]) - excludes only AppointmentStatus.cancelled.
+    rescheduled is NOT a terminal/inactive status - it means the same
+    appointment row is still happening, just moved to a new slot (see
+    book_or_modify_appointment's "reschedule" branch, which sets this status
+    on the existing row rather than ever flipping it back to confirmed) - a
+    cancelled appointment's department shouldn't keep flagging the patient
+    for paperwork tied to a visit that isn't happening, but a rescheduled
+    one absolutely should) -> distinct departments -> union of
+    required_document_types, minus the document_types the patient already
+    has on file. Shared by this tool and the Follow-up agent's scan (same
+    gap, two different callers/contexts) - not duplicated logic."""
 ```
 
 ```python
@@ -224,11 +229,22 @@ duplicate: `"I already had that one on file — no need to upload it again."`
   tool itself, callable by both this agent's tool and the Follow-up agent's
   scan without either agent calling the other's tools (keeps the "each
   agent has its own tool set" distinctness rule intact).
-- **Found during user cross-check:** `_missing_required_documents` originally
-  had no `Appointment.status` filter, so a *cancelled* appointment's
-  department would still flag the patient as missing that department's
-  paperwork. Fixed inline in the tool's docstring above — the query now
-  scopes to `pending`/`confirmed` appointments only.
+- **Found during user cross-check (two rounds):** `_missing_required_documents`
+  originally had no `Appointment.status` filter at all, so a *cancelled*
+  appointment's department would still flag the patient. First fix scoped
+  it to `pending`/`confirmed` only — but a second round of cross-check
+  caught that this wrongly excludes `rescheduled` too: rescheduling doesn't
+  create a new row or flip status back to `confirmed` (see
+  `book_or_modify_appointment`'s "reschedule" branch), it's the *same*
+  appointment, still happening, just on a new slot. Excluding it would mean
+  a patient whose only Cardiology appointment was rescheduled (not
+  cancelled) wrongly shows no missing-document gap. This same gap was
+  already present in `_conflicting_appointment`
+  (`app/tools/appointment_tools.py`, pre-existing Phase 3 code, not part of
+  this spec) and has now been fixed there too, with a regression test
+  (`test_book_or_modify_appointment_conflict_check_includes_rescheduled_appointments`).
+  Final, correct filter everywhere: `status.in_([pending, confirmed,
+  rescheduled])`, equivalently "not cancelled."
 - `DocumentState` is now a fully-named `TypedDict` (was previously only
   described in prose), matching `CoordinatorState`/`RoutingState`/
   `AppointmentState`'s existing pattern.

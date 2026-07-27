@@ -85,16 +85,22 @@ def create_reminder(db: Session, patient_id: str, reminder_type: str, scheduled_
 @audited("scan_incomplete_workflows", "WorkflowRun")
 def scan_incomplete_workflows(db: Session) -> dict:
     """Two real queries, not one fixed response:
-    1. Confirmed appointments with a future start_time
-       (status=confirmed AND AppointmentSlot.start_time > now() - an old
-       confirmed appointment with a start_time in the past shouldn't get a
+    1. Active appointments with a future start_time
+       (status.in_([pending, confirmed, rescheduled]) - NOT just
+       status=confirmed; rescheduled is still an active, upcoming
+       appointment (the same row, just moved to a new slot - see
+       book_or_modify_appointment's "reschedule" branch, which never flips
+       status back to confirmed), so it needs a reminder too, same as a
+       plain confirmed one - AND AppointmentSlot.start_time > now(), since
+       an old appointment with a start_time in the past shouldn't get a
        reminder scheduled in the past too, harmless as that is since
        delivery is simulated, but worth being deliberate about) and no
        existing Reminder(reminder_type=appointment, appointment_id=this one)
        -> creates one, scheduled_at = appointment's start_time minus 24h.
     2. For every patient with at least one appointment, calls
        _missing_required_documents(db, patient_id) (already filters to
-       pending/confirmed appointments - see Document agent spec); for each
+       pending/confirmed/rescheduled appointments - see Document agent
+       spec); for each
        missing document_type with no existing pending
        Reminder(reminder_type=missing_document, note=that document_type)
        for that patient -> creates one (note=document_type), scheduled_at =
@@ -204,7 +210,10 @@ decision).
   second department's own requirement) gets **two** separate
   `missing_document` reminders, each with a different `note` (regression
   test for the per-type dedup fix); a confirmed appointment with a
-  `start_time` in the past does not get a reminder created.
+  `start_time` in the past does not get a reminder created; a
+  **rescheduled** (not cancelled) appointment with a future `start_time`
+  still gets a reminder created (regression test for the
+  rescheduled-status fix below).
 - `tests/test_followup_agent.py`: mocked model summarizes a scan result;
   tool called exactly once per invocation.
 - `tests/test_staff_routes.py`: patient gets 403 on all three routes; staff
@@ -231,6 +240,18 @@ decision).
 - Confirmed escalation approve/reject is a plain staff decision, not routed
   through any LLM — consistent with every other place in this session where
   a deterministic human action shouldn't be second-guessed by a model.
+- **Found during a second round of user cross-check:** the appointment-
+  reminder query originally read `status=confirmed` only, which silently
+  excludes `rescheduled` appointments — an appointment that's been
+  rescheduled is not cancelled, it's the same row still happening on a new
+  slot (see `book_or_modify_appointment`'s "reschedule" branch; status never
+  flips back to `confirmed`). A patient whose only appointment was
+  rescheduled would never get a reminder at all. Fixed: the filter is now
+  `status.in_([pending, confirmed, rescheduled])`. This is the same
+  underlying gap as `_missing_required_documents`'s fix in the Document
+  agent spec, and as a pre-existing bug in `app/tools/appointment_tools.py`'s
+  `_conflicting_appointment` (Phase 3 code, fixed directly with a
+  regression test as part of this cross-check, not deferred).
 - Confirmed this closes the previously-unbuilt staff-facing minimum
   requirement from `problem_statement.md` line 207, not just the Follow-up
   agent itself.
