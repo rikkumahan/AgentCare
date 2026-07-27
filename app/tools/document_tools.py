@@ -1,7 +1,11 @@
 import hashlib
 import os
 import uuid
+from typing import Annotated
 
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
 from sqlalchemy.orm import Session
 
 from app.audit import audited
@@ -103,3 +107,33 @@ def store_and_classify_document(db: Session, patient_id: str, file_path: str, do
         "document_type": document.document_type.value,
         "missing_document_types": _missing_required_documents(db, patient_id),
     }
+
+
+def _document_summary(result: dict) -> str:
+    # Same content-vs-artifact gotcha documented in docs/memory/gotchas.md:
+    # only `content` survives into the model's next turn - a bare status
+    # word gives it nothing to act on when deciding whether to reply or
+    # mention missing paperwork.
+    if result["status"] == "error":
+        return f"Document store result: error - {result['error']}"
+    missing = result.get("missing_document_types") or []
+    summary = f"Document store result: {result['status']} as {result['document_type']}."
+    if missing:
+        summary += f" Missing document types still needed: {', '.join(missing)}."
+    return summary
+
+
+@tool(response_format="content_and_artifact")
+def store_and_classify_document_tool(
+    file_path: str,
+    document_type: str,
+    patient_id: Annotated[str, InjectedState("patient_id")],
+    config: RunnableConfig,
+):
+    """Save and classify a document the patient attached. document_type
+    must be one of: ecg, lab_report, prescription_old, insurance, id_proof,
+    other - pick the best fit based on the filename and any note the
+    patient wrote in their request."""
+    db = config["configurable"]["db"]
+    result = store_and_classify_document(db, patient_id, file_path, document_type)
+    return _document_summary(result), result

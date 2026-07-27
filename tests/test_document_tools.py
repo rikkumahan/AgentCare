@@ -3,7 +3,12 @@ import uuid
 import hashlib
 
 from app.models import AppointmentStatus, AuditEvent, DocumentType, PatientDocument
-from app.tools.document_tools import _checksum_file, _missing_required_documents, store_and_classify_document
+from app.tools.document_tools import (
+    _checksum_file,
+    _document_summary,
+    _missing_required_documents,
+    store_and_classify_document,
+)
 from tests.fakes import make_appointment, make_department, make_doctor, make_patient_profile
 
 
@@ -173,3 +178,39 @@ def test_store_and_classify_document_reports_missing_types_alongside_save(tmp_pa
 
     assert result["status"] == "saved"
     assert result["missing_document_types"] == ["ecg"]
+
+
+def test_document_summary_includes_real_status_and_missing_types_not_a_bare_word():
+    # This string is the only part of the tool result the model actually
+    # sees on its next turn - artifact never gets serialized back into the
+    # conversation. A bare status word gives the model nothing to act on,
+    # same content-vs-artifact lesson as _slots_summary/_departments_summary.
+    result = {
+        "id": "doc-1",
+        "status": "saved",
+        "document_type": "ecg",
+        "missing_document_types": ["insurance"],
+    }
+
+    summary = _document_summary(result)
+
+    assert "saved" in summary
+    assert "ecg" in summary
+    assert "insurance" in summary
+
+
+def test_document_summary_handles_duplicate_status():
+    result = {"id": "doc-1", "status": "duplicate", "document_type": "ecg", "missing_document_types": []}
+
+    summary = _document_summary(result)
+
+    assert "duplicate" in summary
+
+
+def test_document_summary_handles_error_status():
+    result = {"id": None, "status": "error", "error": "File not found: /no/such/file.pdf"}
+
+    summary = _document_summary(result)
+
+    assert "error" in summary
+    assert "File not found" in summary
