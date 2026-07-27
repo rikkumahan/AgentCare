@@ -1,8 +1,11 @@
+import hashlib
+import os
 import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Appointment, AppointmentStatus, Department, Doctor, PatientDocument
+from app.audit import audited
+from app.models import Appointment, AppointmentStatus, Department, Doctor, DocumentType, PatientDocument
 
 
 def _missing_required_documents(db: Session, patient_id: str) -> list[str]:
@@ -44,3 +47,59 @@ def _missing_required_documents(db: Session, patient_id: str) -> list[str]:
         for doc in db.query(PatientDocument).filter(PatientDocument.patient_id == patient_uuid).all()
     }
     return sorted(required - have)
+
+
+def _checksum_file(file_path: str) -> str:
+    sha256 = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
+
+
+@audited("store_and_classify_document", "PatientDocument")
+def store_and_classify_document(db: Session, patient_id: str, file_path: str, document_type: str) -> dict:
+    if not os.path.isfile(file_path):
+        return {"id": None, "status": "error", "error": f"File not found: {file_path}"}
+    if os.path.getsize(file_path) == 0:
+        return {"id": None, "status": "error", "error": f"File is empty: {file_path}"}
+
+    checksum = _checksum_file(file_path)
+    patient_uuid = uuid.UUID(patient_id)
+
+    existing = (
+        db.query(PatientDocument)
+        .filter(PatientDocument.patient_id == patient_uuid)
+        .filter(PatientDocument.checksum == checksum)
+        .first()
+    )
+    if existing is not None:
+        return {
+            "id": str(existing.id),
+            "status": "duplicate",
+            "document_type": existing.document_type.value,
+            "missing_document_types": _missing_required_documents(db, patient_id),
+        }
+
+    try:
+        doc_type_enum = DocumentType(document_type)
+    except ValueError:
+        # The model could in principle send something off the fixed list -
+        # fall back rather than crash the whole graph run over a
+        # classification quibble.
+        doc_type_enum = DocumentType.other
+
+    document = PatientDocument(
+        patient_id=patient_uuid,
+        document_type=doc_type_enum,
+        file_path=file_path,
+        checksum=checksum,
+    )
+    db.add(document)
+    db.commit()
+    return {
+        "id": str(document.id),
+        "status": "saved",
+        "document_type": document.document_type.value,
+        "missing_document_types": _missing_required_documents(db, patient_id),
+    }

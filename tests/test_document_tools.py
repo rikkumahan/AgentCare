@@ -1,7 +1,9 @@
 import uuid
 
-from app.models import AppointmentStatus
-from app.tools.document_tools import _missing_required_documents
+import hashlib
+
+from app.models import AppointmentStatus, AuditEvent, DocumentType, PatientDocument
+from app.tools.document_tools import _checksum_file, _missing_required_documents, store_and_classify_document
 from tests.fakes import make_appointment, make_department, make_doctor, make_patient_profile
 
 
@@ -58,3 +60,116 @@ def test_missing_required_documents_still_flags_gap_for_rescheduled_appointment(
     result = _missing_required_documents(db_session, str(profile.id))
 
     assert result == ["ecg"]
+
+
+def test_checksum_file_returns_sha256_of_real_bytes(tmp_path):
+    file_path = tmp_path / "sample.txt"
+    file_path.write_bytes(b"hello world")
+
+    checksum = _checksum_file(str(file_path))
+
+    assert checksum == hashlib.sha256(b"hello world").hexdigest()
+
+
+def test_store_and_classify_document_saves_new_document(tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_path = tmp_path / "ecg_scan.pdf"
+    file_path.write_bytes(b"ecg-bytes-1")
+
+    result = store_and_classify_document(db_session, str(profile.id), str(file_path), "ecg")
+
+    assert result["status"] == "saved"
+    assert result["document_type"] == "ecg"
+    document = db_session.query(PatientDocument).filter(PatientDocument.id == uuid.UUID(result["id"])).one()
+    assert document.patient_id == profile.id
+    assert document.document_type == DocumentType.ecg
+
+
+def test_store_and_classify_document_detects_duplicate_by_content_not_filename(tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_a = tmp_path / "first.pdf"
+    file_a.write_bytes(b"same-bytes")
+    file_b = tmp_path / "second.pdf"
+    file_b.write_bytes(b"same-bytes")
+
+    first = store_and_classify_document(db_session, str(profile.id), str(file_a), "lab_report")
+    second = store_and_classify_document(db_session, str(profile.id), str(file_b), "lab_report")
+
+    assert first["status"] == "saved"
+    assert second["status"] == "duplicate"
+    assert second["id"] == first["id"]
+    count = db_session.query(PatientDocument).filter(PatientDocument.patient_id == profile.id).count()
+    assert count == 1
+
+
+def test_store_and_classify_document_different_patients_same_bytes_each_get_own_row(tmp_path, db_session):
+    profile_a = make_patient_profile(db_session)
+    profile_b = make_patient_profile(db_session)
+    file_a = tmp_path / "a.pdf"
+    file_a.write_bytes(b"shared-bytes")
+    file_b = tmp_path / "b.pdf"
+    file_b.write_bytes(b"shared-bytes")
+
+    result_a = store_and_classify_document(db_session, str(profile_a.id), str(file_a), "insurance")
+    result_b = store_and_classify_document(db_session, str(profile_b.id), str(file_b), "insurance")
+
+    assert result_a["status"] == "saved"
+    assert result_b["status"] == "saved"
+    assert result_a["id"] != result_b["id"]
+
+
+def test_store_and_classify_document_falls_back_to_other_for_unknown_type(tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_path = tmp_path / "mystery.bin"
+    file_path.write_bytes(b"mystery-bytes")
+
+    result = store_and_classify_document(db_session, str(profile.id), str(file_path), "not_a_real_type")
+
+    assert result["status"] == "saved"
+    assert result["document_type"] == "other"
+
+
+def test_store_and_classify_document_rejects_missing_file(db_session):
+    profile = make_patient_profile(db_session)
+
+    result = store_and_classify_document(db_session, str(profile.id), "/no/such/file.pdf", "ecg")
+
+    assert result["status"] == "error"
+    assert result["id"] is None
+
+
+def test_store_and_classify_document_rejects_empty_file(tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_path = tmp_path / "empty.pdf"
+    file_path.write_bytes(b"")
+
+    result = store_and_classify_document(db_session, str(profile.id), str(file_path), "ecg")
+
+    assert result["status"] == "error"
+
+
+def test_store_and_classify_document_writes_audit_event(tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_path = tmp_path / "audit.pdf"
+    file_path.write_bytes(b"audit-bytes")
+
+    store_and_classify_document(db_session, str(profile.id), str(file_path), "ecg")
+
+    audit_actions = {e.action for e in db_session.query(AuditEvent).all()}
+    assert "store_and_classify_document" in audit_actions
+
+
+def test_store_and_classify_document_reports_missing_types_alongside_save(tmp_path, db_session):
+    department = make_department(db_session, name=f"Cardiology {uuid.uuid4().hex[:8]}")
+    department.required_document_types = ["ecg", "insurance"]
+    db_session.commit()
+    doctor = make_doctor(db_session, department=department)
+    profile = make_patient_profile(db_session)
+    make_appointment(db_session, patient=profile, doctor=doctor, status=AppointmentStatus.confirmed)
+    file_path = tmp_path / "insurance_card.pdf"
+    file_path.write_bytes(b"insurance-bytes")
+
+    result = store_and_classify_document(db_session, str(profile.id), str(file_path), "insurance")
+
+    assert result["status"] == "saved"
+    assert result["missing_document_types"] == ["ecg"]
