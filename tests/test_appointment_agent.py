@@ -56,6 +56,21 @@ def test_appointment_llm_node_with_no_tool_call_routes_to_end(monkeypatch):
     assert route_after_appointment_llm(state) == "__end__"
 
 
+def test_route_after_appointment_llm_ends_once_booked_even_if_model_wants_more_tools():
+    # Confirmed against the real API: a model kept calling
+    # book_or_modify_appointment_tool for a full minute after its first
+    # success, producing three separate real, confirmed appointments for
+    # one request. This must be blocked in code, not left to the prompt -
+    # even a message that DOES request another tool call must not be
+    # allowed through once a booking already succeeded.
+    state = _appointment_state(
+        appointment_id="already-booked-id",
+        messages=[ai_message_with_tool_call("book_or_modify_appointment_tool", {"slot_id": "s2", "action": "book", "existing_appointment_id": None})],
+    )
+
+    assert route_after_appointment_llm(state) == "__end__"
+
+
 def test_appointment_capture_node_sets_appointment_id_on_success():
     tool_message = ToolMessage(
         content="Appointment book result: confirmed",
@@ -160,3 +175,40 @@ def test_appointment_agent_node_seeds_real_current_date(monkeypatch, db_session)
     human_messages = [m for m in recording_model.seen_messages if isinstance(m, HumanMessage)]
     assert human_messages
     assert f"current date: {date.today().isoformat()}" in human_messages[0].content
+
+
+def test_appointment_agent_node_never_books_twice_even_if_model_tries(monkeypatch, db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot_a = make_appointment_slot(db_session, doctor=doctor)
+    slot_b = make_appointment_slot(db_session, doctor=doctor)
+    profile = make_patient_profile(db_session)
+
+    # Scripted to try to book slot_a, then (if the graph let it through)
+    # slot_b too - real models have been observed doing exactly this
+    # despite being told to stop after a successful booking.
+    fake_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("check_slot_availability_tool", {"preferred_window": {}}),
+            ai_message_with_tool_call(
+                "book_or_modify_appointment_tool",
+                {"slot_id": str(slot_a.id), "action": "book", "existing_appointment_id": None},
+            ),
+            ai_message_with_tool_call(
+                "book_or_modify_appointment_tool",
+                {"slot_id": str(slot_b.id), "action": "book", "existing_appointment_id": None},
+            ),
+        ]
+    )
+    monkeypatch.setattr("app.agents.appointment.get_llm", lambda: fake_model)
+
+    state = workflow_state(
+        department_id=str(department.id),
+        patient_id=str(profile.id),
+        request_text="book a cardiology appointment",
+    )
+    update = appointment_agent_node(state, config={"configurable": {"db": db_session}})
+
+    assert update["appointment_id"] is not None
+    assert db_session.query(Appointment).filter(Appointment.patient_id == profile.id).count() == 1
+    assert db_session.query(AppointmentSlot).filter(AppointmentSlot.id == slot_b.id).one().status == SlotStatus.open

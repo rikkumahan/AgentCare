@@ -63,6 +63,15 @@ def appointment_capture_node(state: AppointmentState, config):
 
 
 def route_after_appointment_llm(state: AppointmentState) -> Literal["appointment_tools", "__end__"]:
+    if state.get("appointment_id"):
+        # A successful booking already happened this conversation - never
+        # dispatch another tool call after that, no matter what the model
+        # tries next. Confirmed against the real API: a model kept calling
+        # book_or_modify_appointment_tool for a full minute after its first
+        # success, producing three separate real, confirmed appointments
+        # for a single request. The prompt says stop; this makes it true
+        # regardless of whether the model actually does.
+        return "__end__"
     last = state["messages"][-1]
     if getattr(last, "tool_calls", None):
         return "appointment_tools"

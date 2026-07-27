@@ -4,7 +4,7 @@ from langchain_groq import ChatGroq
 
 from app.config import settings
 
-MODEL_NAME = "llama-3.1-8b-instant"
+MODEL_NAME = "openai/gpt-oss-20b"
 MAX_RETRY_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 1.0
 REQUEST_TIMEOUT_SECONDS = 30.0
