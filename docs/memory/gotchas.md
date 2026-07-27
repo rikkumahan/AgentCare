@@ -161,6 +161,32 @@ model "just saw") must be validated as a real input, not assumed
 well-formed — parse defensively and return a structured error, matching the
 existing pattern used for "not found"/"no longer open" cases.
 
+## A tool's `content` (not `artifact`) is all the model ever sees again
+
+**Symptom:** The Appointment agent's real LLM call kept inventing fake
+slot ids (`"slot_123"`, `"slot_456"`) instead of copying a real one from
+`check_slot_availability`'s result, then falsely claimed success. This
+looked like a model-competence problem (worse with a smaller model) but
+wasn't — it reproduced identically regardless of model size.
+
+**Why:** with `@tool(response_format="content_and_artifact")`, the tool
+returns `(content, artifact)`. `artifact` is for *our own code* to read
+(capture nodes already do this correctly) — it is never serialized back
+into the conversation. Only `content` is what the model sees on its next
+turn. `check_slot_availability_tool`'s content was a bare count, `"Found 2
+open slot(s)"` — the model had no real id anywhere in view, so it invented
+one. Not a reasoning failure; a missing-information problem we created.
+
+**Fix:** `_slots_summary()` in `app/tools/appointment_tools.py` puts each
+slot's real `slot_id`, doctor, and start time into `content` itself.
+
+**How to apply:** any tool whose result the model needs to reference in a
+*later* tool call (an id, a name, anything it must copy) must put that
+value in `content`, not just `artifact` — artifact-only data is invisible
+to the model from the very next turn onward. When debugging "the model
+hallucinated an id/value it just saw," check what's actually in `content`
+before assuming a prompt or model problem.
+
 ## Tampering the *last* character of a signed token is flaky
 
 `itsdangerous` tokens are base64url-encoded; the final character(s) of a
