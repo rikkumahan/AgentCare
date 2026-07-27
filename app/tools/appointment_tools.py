@@ -165,6 +165,21 @@ def book_or_modify_appointment(
     return {"id": None, "status": "error", "error": f"Unknown action: {action}"}
 
 
+def _slots_summary(slots: list[dict]) -> str:
+    # This is the only part of the tool result the model actually sees on
+    # its next turn - `artifact` (the real dicts with real ids) never gets
+    # sent back to the model, only `content` does. A bare count here gives
+    # the model nothing to copy a real slot_id from, so it invents one -
+    # confirmed against the real API: it hallucinated ids like "slot_123"
+    # after seeing only "Found 2 open slot(s)". List the real data instead.
+    if not slots:
+        return "Found 0 open slot(s)."
+    lines = [
+        f"- slot_id={s['slot_id']} doctor={s['doctor_name']} start={s['start_time']}" for s in slots
+    ]
+    return f"Found {len(slots)} open slot(s):\n" + "\n".join(lines)
+
+
 @tool(response_format="content_and_artifact")
 def check_slot_availability_tool(
     preferred_window: dict,
@@ -177,7 +192,7 @@ def check_slot_availability_tool(
     (defaults to the next 14 days)."""
     db = config["configurable"]["db"]
     result = check_slot_availability(db, department_id, preferred_window)
-    return f"Found {len(result)} open slot(s)", result
+    return _slots_summary(result), result
 
 
 @tool(response_format="content_and_artifact")

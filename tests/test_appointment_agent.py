@@ -1,3 +1,5 @@
+from datetime import date
+
 from langchain_core.messages import HumanMessage, ToolMessage
 
 from app.agents.appointment import (
@@ -126,3 +128,35 @@ def test_appointment_agent_node_books_appointment_end_to_end(monkeypatch, db_ses
     assert str(appointment.patient_id) == str(profile.id)
     booked_slot = db_session.query(AppointmentSlot).filter(AppointmentSlot.id == slot.id).one()
     assert booked_slot.status == SlotStatus.booked
+
+
+def test_appointment_agent_node_seeds_real_current_date(monkeypatch, db_session):
+    # Real Groq models have no notion of "today" and will guess (sometimes
+    # wrong) if not told - confirmed against the live API, which computed a
+    # 2024 date window for a 2026 request. The seed message must give the
+    # model the real date so it doesn't have to guess.
+    department = make_department(db_session)
+    profile = make_patient_profile(db_session)
+
+    class _RecordingModel(FakeToolCallingModel):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.seen_messages = None
+
+        def invoke(self, messages):
+            self.seen_messages = messages
+            return super().invoke(messages)
+
+    recording_model = _RecordingModel([ai_message_text("no slots available")])
+    monkeypatch.setattr("app.agents.appointment.get_llm", lambda: recording_model)
+
+    state = workflow_state(
+        department_id=str(department.id),
+        patient_id=str(profile.id),
+        request_text="book a cardiology appointment",
+    )
+    appointment_agent_node(state, config={"configurable": {"db": db_session}})
+
+    human_messages = [m for m in recording_model.seen_messages if isinstance(m, HumanMessage)]
+    assert human_messages
+    assert f"current date: {date.today().isoformat()}" in human_messages[0].content

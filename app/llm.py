@@ -4,7 +4,7 @@ from langchain_groq import ChatGroq
 
 from app.config import settings
 
-MODEL_NAME = "llama-3.3-70b-versatile"
+MODEL_NAME = "llama-3.1-8b-instant"
 MAX_RETRY_ATTEMPTS = 3
 BASE_BACKOFF_SECONDS = 1.0
 

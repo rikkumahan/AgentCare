@@ -1,8 +1,25 @@
 from datetime import datetime, timedelta, timezone
 
 from app.models import Appointment, AppointmentSlot, AuditEvent, Doctor, SlotStatus
-from app.tools.appointment_tools import book_or_modify_appointment, check_slot_availability
+from app.tools.appointment_tools import _slots_summary, book_or_modify_appointment, check_slot_availability
 from tests.fakes import make_appointment_slot, make_department, make_doctor, make_patient_profile
+
+
+def test_slots_summary_includes_real_slot_id_the_model_can_copy():
+    # This string is the only part of the tool result the model actually
+    # sees on its next turn - confirmed against the real API that a
+    # count-only summary causes the model to invent a fake slot_id instead
+    # of copying a real one, since it was never shown one.
+    slots = [{"slot_id": "abc-123", "doctor_name": "Dr. Rao", "start_time": "2026-08-01T17:00:00+00:00"}]
+
+    summary = _slots_summary(slots)
+
+    assert "abc-123" in summary
+    assert "Dr. Rao" in summary
+
+
+def test_slots_summary_handles_empty_list():
+    assert _slots_summary([]) == "Found 0 open slot(s)."
 
 
 def test_check_slot_availability_returns_open_slots_in_department_within_window(db_session):

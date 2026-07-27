@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
@@ -12,15 +13,27 @@ from app.tools.appointment_tools import book_or_modify_appointment_tool, check_s
 APPOINTMENT_SYSTEM_PROMPT = (
     "You are the Appointment Agent for AgentCare, an administrative "
     "healthcare workflow assistant. Call check_slot_availability to find "
-    "open slots in the patient's department (preferred_window may include "
-    "start_date/end_date as YYYY-MM-DD strings if the patient mentioned a "
-    "timeframe, otherwise pass {}). Pick a slot that reasonably matches "
-    "the patient's request, then call book_or_modify_appointment with "
-    "action='book' and existing_appointment_id=null to reserve it. If "
-    "booking returns status 'error', pick a different slot from the list "
-    "and try again. Once booked, reply with a short confirmation sentence "
-    "and do not call any more tools. Never diagnose or suggest treatment — "
-    "only handle scheduling."
+    "open slots in the patient's department. Leave preferred_window as {} "
+    "unless the patient named a SPECIFIC calendar date (e.g. 'March 5th') "
+    "— the tool already defaults to a sensible upcoming window, and you do "
+    "not need to compute start_date/end_date yourself for vague phrases "
+    "like 'next week' or 'soon'. If you do set start_date/end_date, use "
+    "the current date given in the request message to compute them "
+    "correctly — never guess a year.\n\n"
+    "If check_slot_availability returns zero slots, do NOT call "
+    "book_or_modify_appointment with a made-up slot_id. Instead call "
+    "check_slot_availability exactly once more with preferred_window={} to "
+    "widen the search. If that also returns zero slots, reply that no "
+    "slots are currently available and stop — do not call any more tools.\n\n"
+    "Only ever pass a slot_id you actually saw in a check_slot_availability "
+    "result this conversation — never invent one. Pick a slot that "
+    "reasonably matches the patient's request, then call "
+    "book_or_modify_appointment with action='book' and "
+    "existing_appointment_id=null to reserve it. If booking returns status "
+    "'error', pick a different real slot from the list and try again. Once "
+    "booked, reply with a short confirmation sentence and do not call any "
+    "more tools. Never diagnose or suggest treatment — only handle "
+    "scheduling."
 )
 
 appointment_tools = [check_slot_availability_tool, book_or_modify_appointment_tool]
@@ -81,7 +94,9 @@ def appointment_agent_node(state: WorkflowState, config) -> dict:
     only the field that belongs in WorkflowState."""
     result = _appointment_subgraph.invoke(
         {
-            "messages": [HumanMessage(f"request: {state['request_text']}")],
+            "messages": [
+                HumanMessage(f"current date: {date.today().isoformat()}\nrequest: {state['request_text']}")
+            ],
             "department_id": state["department_id"],
             "patient_id": state["patient_id"],
             "appointment_id": None,
