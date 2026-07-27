@@ -20,8 +20,18 @@ def seed() -> None:
             print("Seed data already present, skipping.")
             return
 
-        cardiology = Department(name="Cardiology", description="Heart and cardiovascular care", active=True)
-        general = Department(name="General Medicine", description="General checkups and referrals", active=True)
+        cardiology = Department(
+            name="Cardiology",
+            description="Heart and cardiovascular care",
+            active=True,
+            required_document_types=["ecg"],
+        )
+        general = Department(
+            name="General Medicine",
+            description="General checkups and referrals",
+            active=True,
+            required_document_types=[],
+        )
         db.add_all([cardiology, general])
         db.flush()
 

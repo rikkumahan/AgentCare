@@ -64,6 +64,7 @@ class Department(Base):
     name: Mapped[str] = mapped_column(String(100), unique=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    required_document_types: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
 class Doctor(Base):
