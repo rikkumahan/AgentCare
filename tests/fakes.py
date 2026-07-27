@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 from langchain_core.messages import AIMessage
 
 from app.models import (
+    Appointment,
     AppointmentSlot,
+    AppointmentStatus,
     Department,
     Doctor,
     PatientProfile,
@@ -74,6 +76,30 @@ def make_appointment_slot(
     db_session.add(slot)
     db_session.commit()
     return slot
+
+
+def make_appointment(
+    db_session,
+    patient: PatientProfile | None = None,
+    doctor: Doctor | None = None,
+    slot: AppointmentSlot | None = None,
+    status: AppointmentStatus = AppointmentStatus.confirmed,
+) -> Appointment:
+    if patient is None:
+        patient = make_patient_profile(db_session)
+    if doctor is None:
+        doctor = make_doctor(db_session)
+    if slot is None:
+        slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = Appointment(
+        patient_id=patient.id,
+        doctor_id=doctor.id,
+        slot_id=slot.id,
+        status=status,
+    )
+    db_session.add(appointment)
+    db_session.commit()
+    return appointment
 
 
 def make_workflow_run(db_session, profile: PatientProfile | None = None) -> WorkflowRun:
