@@ -99,16 +99,20 @@ instruction is removed. Instead:
   plain text — it never calls `book_or_modify_appointment_tool` at all
   anymore. That tool is removed from this agent's tool list entirely; the
   model has no way to book directly, only to propose.
+- `AppointmentState` gains a new key, `available_slots: list[dict]`.
+  `appointment_capture_node` (already exists, currently only captures from
+  `book_or_modify_appointment_tool`) gains a second branch: when the last
+  `ToolMessage` is from `check_slot_availability_tool`, store its `artifact`
+  (the real list of slot dicts, not the `content` summary string) into
+  `available_slots` — same content-vs-artifact pattern used everywhere else,
+  now feeding validation instead of just display.
 - A new `appointment_finalize_node` (mirroring `routing_finalize_node`'s
-  shape) reads the model's final text and **validates it against the real
-  slot list already returned by `check_slot_availability_tool` this
-  conversation** (captured via the tool call's artifact, same
-  content-vs-artifact pattern as everywhere else) — never trusting an
-  LLM-transcribed id blindly, consistent with `_parse_uuid` validation
-  elsewhere. If the text doesn't match any real slot id from this
-  conversation, treat it as "no confident candidate" and fall through to the
-  existing "no slots available" reply path instead of booking or
-  hallucinating.
+  shape) reads the model's final text and **validates it against
+  `state["available_slots"]`** — never trusting an LLM-transcribed id
+  blindly, consistent with `_parse_uuid` validation elsewhere. If the text
+  doesn't match any `slot_id` in `available_slots`, treat it as "no
+  confident candidate" and fall through to the existing "no slots available"
+  reply path instead of booking or hallucinating.
 - `appointment_agent_node` returns `{"candidate_slot_id": ...}` (or `None` if
   no candidate) instead of `{"appointment_id": ...}`. No `appointment_id` is
   ever set by the automatic path anymore — only by the new confirm route
@@ -148,21 +152,36 @@ def continue_as_booking(db, workflow_run) -> WorkflowRun:
     """needs_clarification -> patient chose 'book an appointment'. Runs
     routing_agent_node then appointment_agent_node directly (plain sequential
     calls, no second compiled graph - see prior self-review note), landing on
-    either needs_booking_confirmation, needs_review, or running exactly like
-    a normal run would."""
+    either needs_booking_confirmation, needs_review, or completed exactly
+    like a normal run would.
+
+    CRITICAL (see docs/memory/gotchas.md - "shared SQLAlchemy Session
+    crashes only under real LLM latency"): both node functions dispatch tool
+    calls through LangGraph's ToolNode, which runs them in a worker thread.
+    The config this builds MUST use the SessionLocal registry, never the
+    `db` parameter directly - the exact same rule run_workflow already
+    follows at app/workflow_runner.py:48:
+
+        config = {"configurable": {"db": SessionLocal}}   # NOT {"db": db}
+
+    Using `db` here would silently reintroduce the already-fixed concurrency
+    crash, invisible under mocked tests and only reproducible against the
+    real Groq API - the route calling this function receives `db` from
+    FastAPI's Depends(get_db) purely to load/update the WorkflowRun row
+    itself, not to hand to the graph nodes."""
 
 def commit_confirmed_booking(db, workflow_run) -> WorkflowRun:
     """needs_booking_confirmation -> patient clicked 'yes, book it'. Calls
     book_or_modify_appointment (the plain function, NOT the LLM tool) directly
     with the stored candidate_slot_id and action='book'. Deterministic, no
-    LLM involved in the commit itself - the model already did its one job
-    (proposing a slot); the human's click is what authorizes the write."""
+    ToolNode involved at all here, so `db` (the route's own session) is safe
+    to use directly - this is exactly why the commit step being deterministic
+    (no LLM, no ToolNode) matters beyond just safety-from-hallucination."""
 
 def continue_as_staff_escalation(db, workflow_run, reason: str) -> WorkflowRun:
     """Used by both 'talk to staff' buttons (from needs_clarification and
     from needs_booking_confirmation's decline option). Calls create_escalation
-    directly - no LLM call, the patient's click is itself the deterministic
-    signal."""
+    directly - no LLM call, no ToolNode, `db` is safe to use directly."""
 ```
 
 All three update `workflow_run.state`/`status`/`current_step` the same way
@@ -276,3 +295,15 @@ rendered from real rows, never a free-standing model string."
 - Confirmed this spec does not change `check_slot_availability_tool` or
   `book_or_modify_appointment`/`_tool` themselves — only what calls them and
   when.
+- **Found during user cross-check (not caught in the original draft):**
+  `continue_as_booking` calls node functions whose tool calls run through
+  `ToolNode`'s worker thread, so it must build `config` from `SessionLocal`,
+  never the route's own `db` — the exact bug `gotchas.md` already documents
+  and `workflow_runner.py:48` already works around. Fixed inline in the
+  Architecture section above with an explicit warning and the wrong-vs-right
+  code shown side by side, since this is a documented regression risk with
+  an easy naive-implementation trap.
+- `AppointmentState.available_slots` and the `appointment_capture_node`
+  extension are now named explicitly (were previously described only in
+  prose) so the finalize node's validation step has a concrete field to
+  read.

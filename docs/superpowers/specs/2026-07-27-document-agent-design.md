@@ -101,10 +101,14 @@ def store_and_classify_document(db: Session, patient_id: str, file_path: str, do
     gaps against the patient's appointment departments' required lists."""
 
 def _missing_required_documents(db: Session, patient_id: str) -> list[str]:
-    """Real query: patient's appointments -> distinct departments ->
-    union of required_document_types, minus the document_types the patient
-    already has on file. Shared by this tool and the Follow-up agent's
-    scan (same gap, two different callers/contexts) - not duplicated logic."""
+    """Real query: patient's appointments (filtered to
+    status.in_([AppointmentStatus.pending, AppointmentStatus.confirmed]) -
+    a cancelled appointment's department shouldn't keep flagging the patient
+    for paperwork tied to a visit that isn't happening) -> distinct
+    departments -> union of required_document_types, minus the
+    document_types the patient already has on file. Shared by this tool and
+    the Follow-up agent's scan (same gap, two different callers/contexts) -
+    not duplicated logic."""
 ```
 
 ```python
@@ -126,12 +130,26 @@ content-vs-artifact fix pattern.
 
 ### `app/agents/document.py` (new)
 
-Mirrors the existing agent shape (Coordinator/Routing/Appointment):
+Mirrors the existing agent shape (Coordinator/Routing/Appointment), including
+a fully-named `TypedDict`, matching every other agent's subgraph state
+(previously only described in prose here — named explicitly now):
+
+```python
+class DocumentState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+    patient_id: str
+    file_path: str
+    document_result: dict | None
+```
+
 `DOCUMENT_SYSTEM_PROMPT` tells the model to look at the filename (and the
 patient's own request text as context/note) and call
 `store_and_classify_document_tool` with its best-fit `document_type`, then
 reply with a short confirmation. One tool, one expected call, same
 loop-back-until-final-text shape as the other agents for consistency.
+`document_finalize_node` captures the tool's `artifact` into
+`document_result` (the same content-vs-artifact capture pattern as
+`coordinator_capture_node`/`appointment_capture_node`).
 
 `document_agent_node(state, config)`:
 - If `state["uploaded_files"]` is empty, returns `{}` immediately — no LLM
@@ -185,7 +203,8 @@ duplicate: `"I already had that one on file — no need to upload it again."`
   patients uploading identical bytes both get their own row;
   `_missing_required_documents` returns the right gap for a patient with a
   Cardiology appointment and no ECG on file, and `[]` for a patient with no
-  appointments.
+  appointments **or only a cancelled one** (regression test for the
+  cancelled-appointment filter below).
 - `tests/test_document_agent.py`: mocked model picks a `document_type`,
   tool gets called once, `document_ids` populated; a request with no
   attachment produces zero LLM calls (asserts the no-op short-circuit).
@@ -205,6 +224,14 @@ duplicate: `"I already had that one on file — no need to upload it again."`
   tool itself, callable by both this agent's tool and the Follow-up agent's
   scan without either agent calling the other's tools (keeps the "each
   agent has its own tool set" distinctness rule intact).
+- **Found during user cross-check:** `_missing_required_documents` originally
+  had no `Appointment.status` filter, so a *cancelled* appointment's
+  department would still flag the patient as missing that department's
+  paperwork. Fixed inline in the tool's docstring above — the query now
+  scopes to `pending`/`confirmed` appointments only.
+- `DocumentState` is now a fully-named `TypedDict` (was previously only
+  described in prose), matching `CoordinatorState`/`RoutingState`/
+  `AppointmentState`'s existing pattern.
 - Confirmed no OCR/content-parsing dependency is introduced — filename+note
   classification is sufficient for "classify" as CLAUDE.md describes it, and
   adding real parsing is flagged as a Phase 6+ enhancement, not required now.

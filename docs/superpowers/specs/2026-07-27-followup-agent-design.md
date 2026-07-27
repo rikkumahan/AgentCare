@@ -49,8 +49,28 @@ follow-up if time allows, not built now):**
 
 ## 3. Data model
 
-No schema changes — `Reminder` and `Escalation` already have every column
-this needs (`ReminderType.appointment`/`missing_document`, `EscalationStatus.open`/`approved`/`rejected`).
+`Escalation` already has every column this needs. `Reminder` gains one small
+column:
+
+```python
+# Reminder gains:
+note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+```
+
+One Alembic migration. **Why this is needed** (found during user
+cross-check, not in the original draft): a `missing_document` reminder needs
+to say *which* document type it's about, both so staff can read it (the
+dashboard table shows this) and — more importantly — so dedup can be scoped
+per document type, not just per patient. Without `note`, a patient missing
+two different required document types across two departments would only
+ever get *one* `missing_document` reminder, ever (the naive "does this
+patient already have a pending missing_document reminder" check would treat
+the first gap's reminder as covering the second gap too, which it doesn't).
+With `note` storing the document type (e.g. `"ecg"`), the scan's dedup check
+becomes "does this patient already have a pending `missing_document`
+reminder with this specific `note`" — one reminder per distinct gap, correctly.
+`appointment` reminders don't need this — they already dedup correctly via
+`appointment_id`, which is specific enough on its own.
 
 ## 4. Components
 
@@ -58,20 +78,29 @@ this needs (`ReminderType.appointment`/`missing_document`, `EscalationStatus.ope
 
 ```python
 @audited("create_reminder", "Reminder")
-def create_reminder(db: Session, patient_id: str, reminder_type: str, scheduled_at: str, appointment_id: str | None) -> dict:
+def create_reminder(db: Session, patient_id: str, reminder_type: str, scheduled_at: str, appointment_id: str | None, note: str | None = None) -> dict:
     """Plain insert. scheduled_at is an ISO datetime string, parsed and
     stored. Real write - no fixed/fake response regardless of input."""
 
 @audited("scan_incomplete_workflows", "WorkflowRun")
 def scan_incomplete_workflows(db: Session) -> dict:
     """Two real queries, not one fixed response:
-    1. Confirmed appointments (status=confirmed) with no existing
-       Reminder(reminder_type=appointment, appointment_id=this one) ->
-       creates one, scheduled_at = appointment's start_time minus 24h.
+    1. Confirmed appointments with a future start_time
+       (status=confirmed AND AppointmentSlot.start_time > now() - an old
+       confirmed appointment with a start_time in the past shouldn't get a
+       reminder scheduled in the past too, harmless as that is since
+       delivery is simulated, but worth being deliberate about) and no
+       existing Reminder(reminder_type=appointment, appointment_id=this one)
+       -> creates one, scheduled_at = appointment's start_time minus 24h.
     2. For every patient with at least one appointment, calls
-       _missing_required_documents(db, patient_id); for any patient with a
-       gap and no existing pending Reminder(reminder_type=missing_document)
-       for that patient -> creates one, scheduled_at = now.
+       _missing_required_documents(db, patient_id) (already filters to
+       pending/confirmed appointments - see Document agent spec); for each
+       missing document_type with no existing pending
+       Reminder(reminder_type=missing_document, note=that document_type)
+       for that patient -> creates one (note=document_type), scheduled_at =
+       now. Scoping dedup by note (not just patient) means two different
+       missing types both get their own reminder - see Data model section
+       for why this matters.
     Returns real counts + the actual rows created, not a canned summary."""
 ```
 
@@ -134,7 +163,9 @@ Extends the current bare page with:
   summary sentence shown above it once one has run.
 - A plain table of open escalations (reason, created date) each with two
   buttons, Approve / Reject, posting to `/staff/escalations/{id}/resolve`.
-- A plain table of reminders (patient name, type, scheduled time, status).
+- A plain table of reminders (patient name, type, `note` if set, scheduled
+  time, status) — `note` is what lets staff see *which* document is missing
+  for a `missing_document` row, not just that one exists.
 
 Unstyled beyond `base.html`, matching every other page in the app — real,
 functional, not polished (confirmed in-scope-but-basic per this session's UI
@@ -168,7 +199,12 @@ decision).
 - `tests/test_followup_tools.py`: `scan_incomplete_workflows` creates exactly
   one reminder per gap (running it twice in a row creates zero *new* rows the
   second time — the core "not a fixed response, not duplicated" proof);
-  covers both reminder types (appointment, missing_document).
+  covers both reminder types (appointment, missing_document); a patient
+  missing **two** distinct document types (e.g. Cardiology's ECG and a
+  second department's own requirement) gets **two** separate
+  `missing_document` reminders, each with a different `note` (regression
+  test for the per-type dedup fix); a confirmed appointment with a
+  `start_time` in the past does not get a reminder created.
 - `tests/test_followup_agent.py`: mocked model summarizes a scan result;
   tool called exactly once per invocation.
 - `tests/test_staff_routes.py`: patient gets 403 on all three routes; staff
@@ -184,6 +220,14 @@ decision).
   rather than forcing it into the single-request graph shape.
 - Confirmed no duplicate reminders on repeated scans (checked via the
   "already has a pending Reminder for this gap" query before inserting).
+- **Found during user cross-check (both fixed above):** the original draft
+  deduped `missing_document` reminders per-patient only, so a patient with
+  two separate document gaps would only ever get one such reminder, ever —
+  fixed by adding `Reminder.note` and scoping dedup per `(patient_id,
+  reminder_type, note)`. The original draft also had no lower bound on
+  `start_time` for appointment reminders, so a stale confirmed appointment
+  could get a reminder scheduled in the past — fixed with an explicit
+  future-only filter, called out rather than left implicit.
 - Confirmed escalation approve/reject is a plain staff decision, not routed
   through any LLM — consistent with every other place in this session where
   a deterministic human action shouldn't be second-guessed by a model.

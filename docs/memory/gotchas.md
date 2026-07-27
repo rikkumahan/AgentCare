@@ -187,6 +187,32 @@ to the model from the very next turn onward. When debugging "the model
 hallucinated an id/value it just saw," check what's actually in `content`
 before assuming a prompt or model problem.
 
+## The shared-Session/`ToolNode` bug (above) almost got reintroduced by a design spec
+
+**Symptom:** none yet — caught during a spec cross-check (2026-07-27),
+before any code was written, not via a test failure.
+
+**Why it almost happened again:** the intent-branching/confirmation design
+(`docs/superpowers/specs/2026-07-27-intent-branching-clarification-design.md`)
+needed a new function, `continue_as_booking(db, workflow_run)`, that calls
+`routing_agent_node`/`appointment_agent_node` directly — the same two node
+functions whose tool calls run through `ToolNode`'s worker thread pool (see
+"A shared SQLAlchemy Session crashes only under real LLM latency" above).
+The first draft of the spec gave this function a plain `db` parameter and
+never mentioned building its `config` from `SessionLocal` — the "obvious"
+implementation (`config = {"configurable": {"db": db}}`) would have silently
+reintroduced the exact same crash, invisible under mocked tests, only
+reproducible against the real Groq API, exactly like the first time.
+
+**How to apply:** this isn't a one-time-fixed bug, it's a standing rule any
+new code path must re-satisfy: **any function that invokes a LangGraph node
+whose subgraph contains a `ToolNode`** — not just `run_workflow` itself —
+must build its `config["configurable"]["db"]` from the `SessionLocal`
+registry, never a resolved `db`/`Session` instance, regardless of where that
+`db` came from (a route's `Depends(get_db)`, a script, anything). Before
+writing or reviewing any new code that calls an existing agent node function
+directly (outside the main graph's own `stream()` call), check this first.
+
 ## Tampering the *last* character of a signed token is flaky
 
 `itsdangerous` tokens are base64url-encoded; the final character(s) of a
