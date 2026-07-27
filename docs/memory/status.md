@@ -35,16 +35,31 @@ See `docs/superpowers/specs/2026-07-25-request-routes-design.md` and
 deliberately, not deferred to Phase 6, because CLAUDE.md's top judging
 criterion is the full route→agent→DB chain, and that chain had never been
 proven outside direct Python calls until this route existed. Phase 6 still
-owns styling, a request-history list, file upload, reschedule/cancel, and
-staff-facing routes — none of that is here.
+owns styling, a request-history list, file upload, and staff-facing routes.
 
-69/69 tests passing as of this work (branch `master`, no feature
-branches/worktrees in use, no remote configured yet). Real bugs were caught
-only by actually running things, not by reading the plan: in Phase 3, a
-backwards substring check in `lookup_departments`'s hint matching and a
-`monkeypatch.setattr(..., lambda: FakeToolCallingModel([...]))`
-mock-construction mistake that caused a silent `GraphRecursionError` (see
-`docs/memory/gotchas.md`); before writing the routes plan, a manual check of
-`db.get(WorkflowRun, <string-id>)` and the `patient_id == profile.id`
-ownership comparison against the real DB, confirming both work before
-committing to the plan.
+**Reschedule/cancel — deliberately deferred until after Phase 4 (Document
+agent), decided 2026-07-27.** The tool (`book_or_modify_appointment`)
+already fully supports both actions; per the design spec §7 these are meant
+to be plain routes (`POST /appointments/{id}/reschedule`,
+`POST /appointments/{id}/cancel`) calling that same tool directly with a
+known appointment id from the URL — no agent/prompt changes needed at all,
+so this is small and low-risk whenever it's picked up. Deferred purely for
+sequencing: problem_statement.md §11 puts document coordination in the
+*highest*-weight bucket and the appointment workflow (which includes
+reschedule/cancel) in the *substantial*-weight bucket, and building both at
+once risked both changes touching `app/graph.py` at the same time.
+
+81/81 tests passing as of this work (branch `master`, no feature
+branches/worktrees in use, no remote configured yet). Real bugs kept
+surfacing only by actually running things against the live Groq API, never
+by reading the code: a shared SQLAlchemy `Session` crashing only under real
+network latency (LangGraph's `ToolNode` runs tools in a worker thread —
+fixed with `scoped_session`), a tool's `content` (not `artifact`) being all
+the model ever sees again — both `lookup_departments_tool` and
+`check_slot_availability_tool` originally showed only a bare count, so the
+model had no real id/name to copy and hallucinated one — an unbounded
+`ChatGroq` request timeout that caused a real multi-minute hang, and the
+Appointment agent booking the same request three times before anything
+stopped it (fixed by hard-stopping the graph after the first successful
+booking, not by trusting the prompt). See `docs/memory/gotchas.md` for the
+full list with fixes.
