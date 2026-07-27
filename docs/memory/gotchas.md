@@ -251,6 +251,28 @@ is the real question being asked.
 adding a new query like this and check whether `rescheduled` should be in
 the list too — it almost always should, since it isn't a cancellation.
 
+## `.distinct()` on a query touching a plain `JSON` column crashes on Postgres
+
+**Symptom:** `sqlalchemy.exc.ProgrammingError: (psycopg.errors.UndefinedFunction)
+could not identify an equality operator for type json` from
+`_missing_required_documents` (`app/tools/document_tools.py`), only against
+real Postgres — never against the mocked/unit-level parts of the suite that
+don't hit the DB.
+
+**Why:** `Department.required_document_types` is `mapped_column(JSON, ...)`
+(not `JSONB`). Postgres's plain `json` type has no equality operator, so
+`SELECT DISTINCT` on any query that selects a `json` column (even
+incidentally, via `db.query(Department)`) fails outright. `JSONB` doesn't
+have this problem, but the column is deliberately plain `JSON` per Task 1.
+
+**Fix:** drop the `.distinct()` — it was redundant anyway, since the
+department rows get folded into a `set` immediately after.
+
+**How to apply:** never call `.distinct()` on a query that returns a model
+with a plain `JSON`-typed column, on Postgres. If de-duplication is actually
+needed, dedupe in Python (a `set`/`dict` over ids) instead of at the SQL
+level.
+
 ## Tampering the *last* character of a signed token is flaky
 
 `itsdangerous` tokens are base64url-encoded; the final character(s) of a
