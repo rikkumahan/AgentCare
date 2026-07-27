@@ -1,8 +1,25 @@
 import uuid
 
 from app.models import AuditEvent
-from app.tools.department_tools import lookup_departments
+from app.tools.department_tools import _departments_summary, lookup_departments
 from tests.fakes import make_department
+
+
+def test_departments_summary_includes_real_names_the_model_can_copy():
+    # This string is the only part of the tool result the model actually
+    # sees on its next turn - a bare count leaves it with no real name to
+    # choose from, so it falls back to guessing from the patient's own
+    # wording instead of reading real data (confirmed against the real API).
+    departments = [{"id": "d1", "name": "Cardiology", "description": "Heart care"}]
+
+    summary = _departments_summary(departments)
+
+    assert "Cardiology" in summary
+    assert "Heart care" in summary
+
+
+def test_departments_summary_handles_empty_list():
+    assert _departments_summary([]) == "Found 0 department(s)."
 
 
 def test_lookup_departments_filters_by_hint(db_session):

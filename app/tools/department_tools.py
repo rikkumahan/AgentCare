@@ -23,6 +23,18 @@ def lookup_departments(db: Session, query_hint: str) -> list[dict]:
     return [{"id": str(d.id), "name": d.name, "description": d.description} for d in departments]
 
 
+def _departments_summary(departments: list[dict]) -> str:
+    # Same gotcha as appointment_tools._slots_summary: `content` is the
+    # only part of the tool result the model sees again - `artifact` never
+    # gets sent back. A bare count gives the model no real names to choose
+    # from, so it falls back to pattern-matching the patient's own wording
+    # instead of reading actual data - confirmed against the real API.
+    if not departments:
+        return "Found 0 department(s)."
+    lines = [f"- {d['name']}: {d['description'] or 'no description'}" for d in departments]
+    return f"Found {len(departments)} department(s):\n" + "\n".join(lines)
+
+
 @tool(response_format="content_and_artifact")
 def lookup_departments_tool(query_hint: str, config: RunnableConfig):
     """List active hospital departments that might match the patient's
@@ -30,4 +42,4 @@ def lookup_departments_tool(query_hint: str, config: RunnableConfig):
     request is about (e.g. "chest pain follow-up", "general checkup")."""
     db = config["configurable"]["db"]
     result = lookup_departments(db, query_hint)
-    return f"Found {len(result)} department(s)", result
+    return _departments_summary(result), result

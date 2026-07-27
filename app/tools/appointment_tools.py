@@ -211,4 +211,10 @@ def book_or_modify_appointment_tool(
     result status is "error", pick a different slot and try again."""
     db = config["configurable"]["db"]
     result = book_or_modify_appointment(db, patient_id, slot_id, action, existing_appointment_id)
+    if result["status"] == "error":
+        # Same content-vs-artifact gotcha: the model never sees `artifact`,
+        # so without the real error text here it only knows the word
+        # "error" - not *why* - and can't make a good choice about what to
+        # try next (a different slot vs. checking an existing appointment).
+        return f"Appointment {action} result: error - {result['error']}", result
     return f"Appointment {action} result: {result['status']}", result
