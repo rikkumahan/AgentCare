@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -10,6 +12,11 @@ from app.workflow_runner import run_workflow
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+
+# A double-click, a slow page prompting a repeat click, or a browser
+# resubmitting a POST on refresh must never create a second real booking
+# for the same request - confirmed as a real risk, not hypothetical.
+DUPLICATE_SUBMIT_WINDOW_SECONDS = 15
 
 
 def _get_or_create_profile(db: Session, user: User) -> PatientProfile:
@@ -37,6 +44,22 @@ def submit_request(
     db: Session = Depends(get_db),
 ):
     profile = _get_or_create_profile(db, user)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=DUPLICATE_SUBMIT_WINDOW_SECONDS)
+    recent = (
+        db.query(WorkflowRun)
+        .filter(WorkflowRun.patient_id == profile.id)
+        .filter(WorkflowRun.created_at >= cutoff)
+        .order_by(WorkflowRun.created_at.desc())
+        .first()
+    )
+    if recent is not None and recent.state.get("request_text") == request_text:
+        # Same patient, same exact text, within the window - treat as a
+        # duplicate submission and show the existing run instead of
+        # starting a second real workflow (and possibly a second real
+        # booking) for what is almost certainly one intended request.
+        return RedirectResponse(f"/requests/{recent.id}", status_code=status.HTTP_303_SEE_OTHER)
+
     workflow_run = run_workflow(
         db,
         patient_id=str(profile.id),

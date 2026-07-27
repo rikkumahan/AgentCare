@@ -108,6 +108,63 @@ def test_patient_submits_request_and_sees_real_booking_result(monkeypatch, db_se
     assert appointment.status.value == "confirmed"
 
 
+def test_resubmitting_the_same_request_quickly_does_not_run_the_workflow_twice(monkeypatch, db_session):
+    # A double-click, a slow page prompting a repeat click, or a browser
+    # resubmitting a POST on refresh must never trigger a second real
+    # workflow run (and possibly a second real booking) - confirmed as a
+    # real risk during manual testing, not hypothetical.
+    department = make_department(db_session, name=f"Cardiology {uuid.uuid4().hex[:8]}")
+    doctor = make_doctor(db_session, department=department)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("book_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+    routing_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "cardiology"}),
+            ai_message_text(department.name),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: routing_model)
+    appointment_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("check_slot_availability_tool", {"preferred_window": {}}),
+            ai_message_with_tool_call(
+                "book_or_modify_appointment_tool",
+                {"slot_id": str(slot.id), "action": "book", "existing_appointment_id": None},
+            ),
+            ai_message_text("Your appointment is confirmed."),
+        ]
+    )
+    monkeypatch.setattr("app.agents.appointment.get_llm", lambda: appointment_model)
+
+    cookie = _register_patient("Resubmit Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    request_text = "book a cardiology appointment"
+    first = client.post("/requests/new", data={"request_text": request_text}, follow_redirects=False)
+    assert first.status_code == 303
+    first_location = first.headers["location"]
+
+    # No new mocks configured for a second real run - if the guard failed
+    # and a second workflow actually executed, this would either exhaust
+    # the fakes' scripted responses (IndexError) or hit the real API.
+    second = client.post("/requests/new", data={"request_text": request_text}, follow_redirects=False)
+    assert second.status_code == 303
+    assert second.headers["location"] == first_location
+
+    workflow_run_id = first_location.rsplit("/", 1)[-1]
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    assert db_session.query(Appointment).filter(Appointment.patient_id == workflow_run.patient_id).count() == 1
+
+
 def test_patient_cannot_view_another_patients_request(monkeypatch, db_session):
     safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
     monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
