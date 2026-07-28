@@ -59,7 +59,11 @@ def _render_patient_message(db: Session, user: User, workflow_run: WorkflowRun) 
     workflow_status = workflow_run.status
 
     if workflow_status == WorkflowStatus.needs_intent_selection:
-        message = "It sounds like you're asking about a few things. Which one should I help with first?"
+        if "," in state.get("intent", ""):
+            message = "It sounds like you're asking about a few things. Which one should I help with first?"
+        else:
+            message = "Got it. Now let's take care of the rest of your request — which one's next?"
+
     elif workflow_status == WorkflowStatus.needs_clarification:
         message = f"Hi {user.name}! I want to make sure I help you with the right thing."
 

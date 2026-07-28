@@ -128,9 +128,11 @@ def workflow_state(**overrides) -> dict:
         "status": "running",
         "needs_clarification": False,
         "needs_appointment_reason": False,
+        "remaining_intents": [],
     }
     state.update(overrides)
     return state
+
 
 
 class FakeToolCallingModel:

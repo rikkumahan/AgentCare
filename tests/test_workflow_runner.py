@@ -31,7 +31,9 @@ from tests.fakes import (
     make_patient_profile,
     make_user,
     make_workflow_run,
+    workflow_state,
 )
+
 
 
 
@@ -714,6 +716,70 @@ def test_continue_as_intent_selection_reschedule_lands_on_appointment_selection(
 
     assert result.status == WorkflowStatus.needs_appointment_selection
     assert result.state["pending_appointment_action"] == "reschedule"
+
+
+def test_continue_as_intent_selection_stores_remaining_intent(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = _needs_clarification_run(db_session, profile, user)
+    workflow_run.state = {
+        **workflow_run.state,
+        "intent": "cancel_appointment,book_appointment",
+    }
+    db_session.commit()
+
+    continue_as_intent_selection(db_session, workflow_run, "cancel_appointment")
+
+    db_session.refresh(workflow_run)
+    assert workflow_run.state["remaining_intents"] == ["book_appointment"]
+
+
+
+def test_continue_as_intent_selection_no_remaining_when_last_pick(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    workflow_run = _needs_clarification_run(db_session, profile, user)
+    workflow_run.state = {
+        **workflow_run.state,
+        "intent": "cancel_appointment",
+    }
+    db_session.commit()
+
+    continue_as_intent_selection(db_session, workflow_run, "cancel_appointment")
+
+    db_session.refresh(workflow_run)
+    assert workflow_run.state["remaining_intents"] == []
+
+
+def test_finalize_or_continue_intents_completes_when_nothing_left():
+    from app.workflow_runner import _finalize_or_continue_intents
+
+    workflow_run = WorkflowRun(status=WorkflowStatus.needs_slot_selection)
+    full_state = workflow_state(remaining_intents=[])
+
+    _finalize_or_continue_intents(workflow_run, full_state)
+
+    assert workflow_run.status == WorkflowStatus.completed
+
+
+def test_finalize_or_continue_intents_bounces_back_when_intent_left():
+    from app.workflow_runner import _finalize_or_continue_intents
+
+    workflow_run = WorkflowRun(status=WorkflowStatus.needs_slot_selection)
+    full_state = workflow_state(remaining_intents=["book_appointment"])
+
+    _finalize_or_continue_intents(workflow_run, full_state)
+
+    assert workflow_run.status == WorkflowStatus.needs_intent_selection
+    assert full_state["intent"] == "book_appointment"
+    assert full_state["remaining_intents"] == []
+    assert full_state["needs_intent_selection"] is True
+
+
 
 
 

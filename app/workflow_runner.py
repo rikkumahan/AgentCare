@@ -112,13 +112,36 @@ def run_workflow(
     return workflow_run
 
 
+def _finalize_or_continue_intents(workflow_run: WorkflowRun, full_state: dict) -> None:
+    """Called at every point that would otherwise set a terminal `completed`
+    status. If the patient had a leftover intent from an earlier
+    needs_intent_selection pick, land back there for the next one instead
+    of ending the run - closes the "asked which one first, then forgot the
+    second" gap. Mutates workflow_run/full_state in place; caller still
+    does workflow_run.state = dict(full_state) and db.commit() same as
+    before, this only decides which status to set."""
+    remaining = full_state.get("remaining_intents") or []
+    if remaining:
+        next_intent, *rest = remaining
+        full_state["intent"] = next_intent
+        full_state["remaining_intents"] = rest
+        full_state["needs_intent_selection"] = True
+        full_state["pending_appointment_action"] = None
+        full_state["rescheduling_appointment_id"] = None
+        full_state["department_id"] = None
+        workflow_run.status = WorkflowStatus.needs_intent_selection
+        workflow_run.current_step = "needs_intent_selection"
+    else:
+        workflow_run.status = WorkflowStatus.completed
+
+
 def _land_on_appointment_selection_or_none(db, workflow_run: WorkflowRun, full_state: dict) -> WorkflowRun:
     appointments = list_patient_appointments(db, full_state["patient_id"])
     if appointments:
         workflow_run.status = WorkflowStatus.needs_appointment_selection
+        workflow_run.current_step = "needs_appointment_selection"
     else:
-        workflow_run.status = WorkflowStatus.completed
-    workflow_run.current_step = "needs_appointment_selection"
+        _finalize_or_continue_intents(workflow_run, full_state)
     full_state["status"] = workflow_run.status.value
     workflow_run.state = dict(full_state)
     db.commit()
@@ -144,13 +167,14 @@ def _land_on_slots_or_no_slots(
     slots = check_slot_availability(db, department_id, {})
     if slots:
         workflow_run.status = WorkflowStatus.needs_slot_selection
+        workflow_run.current_step = "needs_slot_selection"
     else:
-        workflow_run.status = WorkflowStatus.completed
-    workflow_run.current_step = "needs_slot_selection"
+        _finalize_or_continue_intents(workflow_run, full_state)
     full_state["status"] = workflow_run.status.value
     workflow_run.state = dict(full_state)
     db.commit()
     return workflow_run
+
 
 
 def continue_as_booking(db, workflow_run: WorkflowRun, override_request_text: str | None = None) -> WorkflowRun:
@@ -212,12 +236,24 @@ def continue_as_booking(db, workflow_run: WorkflowRun, override_request_text: st
 
 def continue_as_intent_selection(db, workflow_run: WorkflowRun, chosen_intent: str) -> WorkflowRun:
     """needs_intent_selection -> patient picked which of the detected
-    intents to handle first. Dispatches to whichever existing, unmodified
+    intents to handle first (or next, if this is a continuation after an
+    earlier pick already completed - see _finalize_or_continue_intents).
+    Stores whatever's left over in remaining_intents before dispatching, so
+    the leftover gets re-offered instead of silently dropped once the
+    chosen action finishes. Dispatches to whichever existing, unmodified
     continuation the single-intent graph path would have used for that
-    label - no new booking/cancel/reschedule logic here, only routing to
-    code that already exists and is already tested."""
+    label - no new booking/cancel/reschedule logic here."""
     chosen = chosen_intent.strip().lower()
     full_state = dict(workflow_run.state)
+
+    original = [label.strip().lower() for label in full_state.get("intent", "").split(",")]
+    remaining = [
+        label for label in original
+        if label != chosen and any(kw in label for kw in ("book", "cancel", "reschedule"))
+    ]
+    full_state["remaining_intents"] = remaining
+    workflow_run.state = full_state
+    db.commit()
 
     if "book" in chosen:
         return continue_as_booking(db, workflow_run)
@@ -227,6 +263,7 @@ def continue_as_intent_selection(db, workflow_run: WorkflowRun, chosen_intent: s
     workflow_run.state = full_state
     db.commit()
     return _land_on_appointment_selection_or_none(db, workflow_run, full_state)
+
 
 
 
@@ -264,9 +301,12 @@ def continue_with_selected_slot(db, workflow_run: WorkflowRun, slot_id: str) -> 
         workflow_run.current_step = "needs_slot_selection"
     else:
         full_state["appointment_id"] = result["id"]
-        workflow_run.status = WorkflowStatus.completed
-        workflow_run.current_step = "appointment_agent"
+        _finalize_or_continue_intents(workflow_run, full_state)
+        if workflow_run.status == WorkflowStatus.completed:
+            workflow_run.current_step = "appointment_agent"
     full_state["status"] = workflow_run.status.value
+
+
 
     workflow_run.state = full_state
     db.commit()
@@ -341,12 +381,12 @@ def continue_as_appointment_action(db, workflow_run: WorkflowRun, appointment_id
     if action == "cancel":
         result = book_or_modify_appointment(db, full_state["patient_id"], None, "cancel", appointment_id)
         full_state["appointment_id"] = result.get("id")
-        workflow_run.status = WorkflowStatus.completed
-        workflow_run.current_step = "needs_appointment_selection"
+        _finalize_or_continue_intents(workflow_run, full_state)
         full_state["status"] = workflow_run.status.value
         workflow_run.state = full_state
         db.commit()
         return workflow_run
+
 
     # reschedule: find the department this appointment is currently in
     appointment = db.query(Appointment).filter(Appointment.id == uuid.UUID(appointment_id)).first()

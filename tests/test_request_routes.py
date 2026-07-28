@@ -1075,7 +1075,7 @@ def test_select_intent_stale_status_is_a_noop_redirect(monkeypatch, db_session):
     assert select_resp.headers["location"] == f"/requests/{workflow_run_id}"
 
 
-def test_render_patient_message_needs_intent_selection(db_session):
+def test_render_patient_message_needs_intent_selection_first_landing(db_session):
     user = make_user(db_session)
     profile = make_patient_profile(db_session, user=user)
     workflow_run = make_workflow_run(db_session, profile=profile)
@@ -1085,5 +1085,18 @@ def test_render_patient_message_needs_intent_selection(db_session):
 
     message = _render_patient_message(db_session, user, workflow_run)
     assert "asking about a few things" in message
+
+
+def test_render_patient_message_needs_intent_selection_continuation(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    workflow_run = make_workflow_run(db_session, profile=profile)
+    workflow_run.status = WorkflowStatus.needs_intent_selection
+    workflow_run.state = {"intent": "book_appointment"}
+    db_session.commit()
+
+    message = _render_patient_message(db_session, user, workflow_run)
+    assert "rest of your request" in message
+
 
 

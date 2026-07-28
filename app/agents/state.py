@@ -21,5 +21,7 @@ class WorkflowState(TypedDict):
     needs_intent_selection: bool
     pending_appointment_action: str | None
     rescheduling_appointment_id: str | None
+    remaining_intents: list[str]
+
 
 
