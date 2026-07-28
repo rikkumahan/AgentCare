@@ -68,7 +68,8 @@ def submit_request(
     if document is not None and document.filename:
         patient_dir = os.path.join(settings.storage_dir, str(profile.id))
         os.makedirs(patient_dir, exist_ok=True)
-        saved_path = os.path.join(patient_dir, f"{uuid.uuid4().hex}_{document.filename}")
+        safe_filename = os.path.basename(document.filename)
+        saved_path = os.path.join(patient_dir, f"{uuid.uuid4().hex}_{safe_filename}")
         with open(saved_path, "wb") as f:
             f.write(document.file.read())
         uploaded_files = [saved_path]

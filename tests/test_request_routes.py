@@ -142,6 +142,39 @@ def test_submit_request_with_document_saves_file_and_passes_path_to_workflow(mon
         assert f.read() == b"pdf-bytes-content"
 
 
+def test_submit_request_with_path_separator_in_filename_is_sanitized(monkeypatch, db_session, tmp_path):
+    monkeypatch.setattr("app.config.settings.storage_dir", str(tmp_path))
+
+    captured = {}
+
+    def fake_run_workflow(db, patient_id, user_id, request_text, uploaded_files=None):
+        captured["patient_id"] = patient_id
+        captured["uploaded_files"] = uploaded_files
+        profile = db.get(PatientProfile, uuid.UUID(patient_id))
+        return make_workflow_run(db, profile=profile)
+
+    monkeypatch.setattr("app.routes.request_routes.run_workflow", fake_run_workflow)
+
+    cookie = _register_patient("Traversal Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post(
+        "/requests/new",
+        data={"request_text": "here is my insurance card"},
+        files={"document": ("../../evil.txt", b"malicious-bytes", "text/plain")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    saved_path = captured["uploaded_files"][0]
+    patient_dir = os.path.join(str(tmp_path), captured["patient_id"])
+    assert saved_path.startswith(patient_dir)
+    assert os.path.dirname(saved_path) == patient_dir
+    assert saved_path.endswith("_evil.txt")
+    with open(saved_path, "rb") as f:
+        assert f.read() == b"malicious-bytes"
+
+
 def test_submit_request_without_document_passes_no_uploaded_files(monkeypatch, db_session):
     captured = {}
 
