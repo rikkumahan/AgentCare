@@ -2,10 +2,11 @@ import os
 import uuid
 
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 from app.auth import hash_password
 from app.main import app
-from app.models import Appointment, PatientProfile, User, UserRole, WorkflowRun
+from app.models import Appointment, PatientDocument, PatientProfile, User, UserRole, WorkflowRun
 from tests.fakes import (
     FakeToolCallingModel,
     ai_message_text,
@@ -17,6 +18,38 @@ from tests.fakes import (
 )
 
 client = TestClient(app)
+
+
+class _FileAwareDocumentModel:
+    """Stands in for the Document Agent's LLM in a route-level test. Unlike
+    FakeToolCallingModel, it reads the real file_path out of the incoming
+    HumanMessage instead of using a value scripted in advance - needed
+    because app/routes/request_routes.py generates the saved path with a
+    fresh uuid4() we can't predict before the request runs."""
+
+    def __init__(self):
+        self._called = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self._called += 1
+        if self._called == 1:
+            human_text = messages[-1].content
+            file_path = human_text.split("file_path: ")[1].split("\n")[0]
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "store_and_classify_document_tool",
+                        "args": {"file_path": file_path, "document_type": "insurance"},
+                        "id": "call_1",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        return AIMessage(content="Saved your document.")
 
 
 def _unique_email(prefix: str) -> str:
@@ -284,3 +317,101 @@ def test_viewing_nonexistent_request_returns_404():
     client.cookies.set("agentcare_session", cookie)
     resp = client.get(f"/requests/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+def test_submitting_request_with_attached_file_saves_it_to_disk_and_creates_document_row(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("submit_document"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+    document_model = _FileAwareDocumentModel()
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: document_model)
+    routing_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "x"}),
+            ai_message_text("UNMATCHED"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: routing_model)
+
+    cookie = _register_patient("Doc Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post(
+        "/requests/new",
+        data={"request_text": "here is my insurance card"},
+        files={"document": ("insurance.pdf", b"insurance-file-bytes-1", "application/pdf")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    document_ids = workflow_run.state.get("document_ids") or []
+    assert len(document_ids) == 1
+
+    document = db_session.query(PatientDocument).filter(PatientDocument.id == uuid.UUID(document_ids[0])).one()
+    assert os.path.isfile(document.file_path)
+    with open(document.file_path, "rb") as f:
+        assert f.read() == b"insurance-file-bytes-1"
+
+
+def test_submitting_same_document_bytes_twice_does_not_create_a_second_row(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE"), ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("submit_document"),
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("submit_document"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+    routing_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "x"}),
+            ai_message_text("UNMATCHED"),
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "x"}),
+            ai_message_text("UNMATCHED"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: routing_model)
+
+    cookie = _register_patient("Dup Doc Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    # Different request_text on each submission - identical text within
+    # DUPLICATE_SUBMIT_WINDOW_SECONDS would trip the route's own
+    # same-request dedup guard and redirect to the first run without
+    # running a second workflow at all, which would defeat this test.
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: _FileAwareDocumentModel())
+    first = client.post(
+        "/requests/new",
+        data={"request_text": "here is my insurance card, first upload"},
+        files={"document": ("insurance.pdf", b"same-insurance-bytes", "application/pdf")},
+        follow_redirects=False,
+    )
+    assert first.status_code == 303
+
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: _FileAwareDocumentModel())
+    second = client.post(
+        "/requests/new",
+        data={"request_text": "here is my insurance card, second upload"},
+        files={"document": ("insurance.pdf", b"same-insurance-bytes", "application/pdf")},
+        follow_redirects=False,
+    )
+    assert second.status_code == 303
+
+    first_run = db_session.get(WorkflowRun, first.headers["location"].rsplit("/", 1)[-1])
+    count = (
+        db_session.query(PatientDocument)
+        .filter(PatientDocument.patient_id == first_run.patient_id)
+        .count()
+    )
+    assert count == 1
