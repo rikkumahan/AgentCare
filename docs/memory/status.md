@@ -26,19 +26,34 @@ with nothing shown to the patient — a judge typing a slightly-off-script
 request would hit exactly that dead end. Explicitly said "I cannot risk"
 this. New order: (1) Document agent — nearly done as of this note (8/10
 tasks complete and reviewed, one Important-severity filename-sanitization
-fix in flight on Task 8); (2) intent branching + the "ask the patient when
-unclear" popup + human-readable wording, from
+fix in flight on Task 8).
+
+**Order finalized (2026-07-27, later still): confirm-before-booking is
+NOT cut — split into its own phase, sequenced after the simpler piece.**
+Final order: (1) Document agent — all 10 tasks complete as of this note,
+111/111 tests passing, final whole-branch review next; (2) intent
+branching + the "ask the patient when unclear" popup + human-readable
+wording ONLY, from
 `docs/superpowers/specs/2026-07-27-intent-branching-clarification-design.md`
-— **minus** that spec's "confirm before booking" pause point (recommended
-cut, still not explicitly confirmed — same caveat as before, don't delete
-that content yet); (3) Follow-up agent — plan already written
-(11 tasks, `docs/superpowers/plans/2026-07-27-followup-agent.md`), just
-moved after intent-branching instead of before it. Still substantial
-scoring weight and still the only thing that builds the required
-staff-facing views (`problem_statement.md` line 207) — not dropped, just
-reordered. (4) Reschedule/cancel plain routes, only if time remains —
-small, tool already supports it. Nothing beyond this — no visual polish,
-no doctor-search, no other extensions.
+sections 1-4 (not the confirm-before-booking sections) — small, low-risk,
+reuses the Appointment agent exactly as it already is (proven, tested,
+no changes to its LLM decision logic); (3) confirm-before-booking, as its
+OWN separate implementation plan written from the same spec's remaining
+sections — the Appointment-agent rework (remove
+book_or_modify_appointment_tool from its tool list, add candidate-slot
+validation, a new status, a new route) — deliberately isolated into its
+own plan/review cycle rather than bundled with (2), since every previous
+touch to the Appointment agent's core LLM logic this session surfaced a
+new real bug; (4) Follow-up agent — reduced scope, decided 2026-07-27:
+keep the appointment-reminder sweep and the required staff
+escalation-review view (`problem_statement.md` line 207 - currently the
+only thing missing this), CUT the missing-document reminder sweep
+entirely (drops the `Reminder.note` column, the per-type dedup logic, and
+`_document_gaps` - the more complex half). Original 11-task plan
+(`docs/superpowers/plans/2026-07-27-followup-agent.md`) needs a matching
+trim before execution, not written yet. (5) Reschedule/cancel plain
+routes, only if time remains — small, tool already supports it. Nothing
+beyond this — no visual polish, no doctor-search, no other extensions.
 
 Two specs (Document, Follow-up) were cross-checked twice by the user
 directly against the running code before any implementation started, and
