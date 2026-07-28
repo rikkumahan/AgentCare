@@ -122,6 +122,7 @@ def workflow_state(**overrides) -> dict:
         "department_id": None,
         "appointment_id": None,
         "document_ids": [],
+        "missing_document_types": [],
         "reminder_ids": [],
         "escalation": None,
         "status": "running",

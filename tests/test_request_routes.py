@@ -2,7 +2,6 @@ import os
 import uuid
 
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage
 
 from app.auth import hash_password
 from app.main import app
@@ -20,36 +19,21 @@ from tests.fakes import (
 client = TestClient(app)
 
 
-class _FileAwareDocumentModel:
-    """Stands in for the Document Agent's LLM in a route-level test. Unlike
-    FakeToolCallingModel, it reads the real file_path out of the incoming
-    HumanMessage instead of using a value scripted in advance - needed
-    because app/routes/request_routes.py generates the saved path with a
-    fresh uuid4() we can't predict before the request runs."""
-
-    def __init__(self):
-        self._called = 0
-
-    def bind_tools(self, tools):
-        return self
-
-    def invoke(self, messages):
-        self._called += 1
-        if self._called == 1:
-            human_text = messages[-1].content
-            file_path = human_text.split("file_path: ")[1].split("\n")[0]
-            return AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "store_and_classify_document_tool",
-                        "args": {"file_path": file_path, "document_type": "insurance"},
-                        "id": "call_1",
-                        "type": "tool_call",
-                    }
-                ],
-            )
-        return AIMessage(content="Saved your document.")
+def _document_model() -> FakeToolCallingModel:
+    # file_path is server-injected (InjectedState) now, not an LLM-settable
+    # tool arg - the route generates the saved path with a fresh uuid4() we
+    # can't predict in advance, but that's fine, the model doesn't need it
+    # any more; the real path comes from graph state regardless of what's
+    # in the tool call args.
+    return FakeToolCallingModel(
+        [
+            ai_message_with_tool_call(
+                "store_and_classify_document_tool",
+                {"document_type": "insurance"},
+            ),
+            ai_message_text("Saved your document."),
+        ]
+    )
 
 
 def _unique_email(prefix: str) -> str:
@@ -329,7 +313,7 @@ def test_submitting_request_with_attached_file_saves_it_to_disk_and_creates_docu
         ]
     )
     monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
-    document_model = _FileAwareDocumentModel()
+    document_model = _document_model()
     monkeypatch.setattr("app.agents.document.get_llm", lambda: document_model)
     routing_model = FakeToolCallingModel(
         [
@@ -390,7 +374,8 @@ def test_submitting_same_document_bytes_twice_does_not_create_a_second_row(monke
     # DUPLICATE_SUBMIT_WINDOW_SECONDS would trip the route's own
     # same-request dedup guard and redirect to the first run without
     # running a second workflow at all, which would defeat this test.
-    monkeypatch.setattr("app.agents.document.get_llm", lambda: _FileAwareDocumentModel())
+    first_document_model = _document_model()
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: first_document_model)
     first = client.post(
         "/requests/new",
         data={"request_text": "here is my insurance card, first upload"},
@@ -399,7 +384,8 @@ def test_submitting_same_document_bytes_twice_does_not_create_a_second_row(monke
     )
     assert first.status_code == 303
 
-    monkeypatch.setattr("app.agents.document.get_llm", lambda: _FileAwareDocumentModel())
+    second_document_model = _document_model()
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: second_document_model)
     second = client.post(
         "/requests/new",
         data={"request_text": "here is my insurance card, second upload"},

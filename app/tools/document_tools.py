@@ -125,9 +125,9 @@ def _document_summary(result: dict) -> str:
 
 @tool(response_format="content_and_artifact")
 def store_and_classify_document_tool(
-    file_path: str,
     document_type: str,
     patient_id: Annotated[str, InjectedState("patient_id")],
+    file_path: Annotated[str, InjectedState("file_path")],
     config: RunnableConfig,
 ):
     """Save and classify a document the patient attached. document_type

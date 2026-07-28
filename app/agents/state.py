@@ -11,6 +11,7 @@ class WorkflowState(TypedDict):
     department_id: str | None
     appointment_id: str | None
     document_ids: list[str]
+    missing_document_types: list[str]
     reminder_ids: list[str]
     escalation: dict | None
     status: str

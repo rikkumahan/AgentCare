@@ -164,6 +164,17 @@ def test_store_and_classify_document_writes_audit_event(tmp_path, db_session):
     assert "store_and_classify_document" in audit_actions
 
 
+def test_store_and_classify_document_tool_schema_excludes_injected_fields():
+    # file_path and patient_id are server-injected via InjectedState, not
+    # LLM-settable - same pattern as patient_id/department_id/workflow_run_id
+    # on the sibling tools (check_slot_availability_tool, etc.). The
+    # LLM-visible schema (what bind_tools sends to the model) must not list
+    # them; only document_type is something the model actually chooses.
+    from app.tools.document_tools import store_and_classify_document_tool
+
+    assert set(store_and_classify_document_tool.args.keys()) == {"document_type"}
+
+
 def test_store_and_classify_document_reports_missing_types_alongside_save(tmp_path, db_session):
     department = make_department(db_session, name=f"Cardiology {uuid.uuid4().hex[:8]}")
     department.required_document_types = ["ecg", "insurance"]

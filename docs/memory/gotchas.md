@@ -74,6 +74,26 @@ Task 5) — this cost real debugging time (recursion-limit errors don't show
 which mock caused them; had to add tracing to `coordinator_llm_node` to see
 the model was being reconstructed fresh every call).
 
+**Recurred (2026-07-27) in a different disguise: a named factory function
+passed directly as the replacement, not a lambda.**
+`monkeypatch.setattr("app.agents.document.get_llm", _document_model)` where
+`_document_model` was `def _document_model() -> FakeToolCallingModel: return
+FakeToolCallingModel([...])` — this is the exact same bug, just without the
+word `lambda` anywhere in it, which made it easy to write without recognizing
+the pattern. Passing a factory *function* as `get_llm`'s replacement is
+identical to passing an inline lambda: every call to `get_llm()` invokes the
+factory fresh. Symptom this time: not a `GraphRecursionError` (the recursion
+limit was high enough, or the loop just kept "succeeding" every iteration
+via a duplicate-detection branch), but a silently wrong result —
+`document_ids` came back empty because the workflow actually failed
+internally and `run_workflow`'s exception handler swallowed it, leaving
+`document_ids` at its unset default. **How to apply, worded more broadly
+this time:** the bug is "does `get_llm()`'s replacement return the *same*
+object on every call," not "is the word `lambda` present." A bare function
+reference, a `functools.partial`, or anything else that *constructs* on each
+call has the identical failure mode. When reviewing a test's mock setup,
+check for object identity across calls, not for lambda syntax specifically.
+
 ## A shared SQLAlchemy Session crashes only under real LLM latency, never in tests
 
 **Symptom:** `sqlalchemy.exc.InvalidRequestError: This session is provisioning

@@ -1,3 +1,4 @@
+import os
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage, ToolMessage
@@ -11,16 +12,17 @@ from app.tools.document_tools import store_and_classify_document_tool
 
 DOCUMENT_SYSTEM_PROMPT = (
     "You are the Document Agent for AgentCare, an administrative healthcare "
-    "workflow assistant. A patient has attached one file to their request. "
-    "Call store_and_classify_document with the given file_path and your "
-    "best-fit document_type, chosen from this fixed list: ecg, lab_report, "
-    "prescription_old, insurance, id_proof, other. Base your choice on the "
-    "filename and the patient's own request text, used only as a note — "
-    "never open, read, or interpret the file's actual contents, and never "
-    "diagnose or interpret what a document means medically; you are only "
-    "filing paperwork, not reviewing it. Once the tool returns a result, "
-    "reply with a short confirmation sentence and do not call any more "
-    "tools."
+    "workflow assistant. A patient has attached one file to their request; "
+    "its filename is given below (the server already knows the real file "
+    "location — you never see or need the full path). Call "
+    "store_and_classify_document with your best-fit document_type, chosen "
+    "from this fixed list: ecg, lab_report, prescription_old, insurance, "
+    "id_proof, other. Base your choice on the filename and the patient's "
+    "own request text, used only as a note — never open, read, or interpret "
+    "the file's actual contents, and never diagnose or interpret what a "
+    "document means medically; you are only filing paperwork, not "
+    "reviewing it. Once the tool returns a result, reply with a short "
+    "confirmation sentence and do not call any more tools."
 )
 
 document_tools = [store_and_classify_document_tool]
@@ -85,11 +87,14 @@ def document_agent_node(state: WorkflowState, config) -> dict:
         return {}
 
     document_ids = []
+    missing_document_types: list[str] = []
     for file_path in uploaded_files:
         result = _document_subgraph.invoke(
             {
                 "messages": [
-                    HumanMessage(f"file_path: {file_path}\nrequest: {state['request_text']}")
+                    HumanMessage(
+                        f"filename: {os.path.basename(file_path)}\nrequest: {state['request_text']}"
+                    )
                 ],
                 "patient_id": state["patient_id"],
                 "file_path": file_path,
@@ -101,5 +106,6 @@ def document_agent_node(state: WorkflowState, config) -> dict:
         document_id = document_result.get("id")
         if document_id:
             document_ids.append(document_id)
+        missing_document_types = document_result.get("missing_document_types") or []
 
-    return {"document_ids": document_ids}
+    return {"document_ids": document_ids, "missing_document_types": missing_document_types}
