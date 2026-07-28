@@ -4,6 +4,40 @@ Architectural/implementation decisions made during the build that aren't
 (fully) captured in CLAUDE.md or the design spec, with the reasoning —
 so nobody re-litigates them from scratch or accidentally reverses them.
 
+## Deploy target is Railway (app + Postgres), superseding CLAUDE.md's Supabase-for-demo plan
+
+CLAUDE.md originally specified: local/judging via `docker-compose` +
+Postgres container, hosted/demo via Supabase Postgres (same schema, same
+migrations, different `DATABASE_URL`). When the time came to actually stand
+up a hosted demo, we deployed to Railway instead, using **Railway's own
+managed Postgres plugin**, not Supabase — one platform, one dashboard, one
+set of credentials, rather than managing two.
+
+**Why:** Supabase was never used in practice by this point in the build;
+Railway was the simpler path from "code that runs in Docker" to "something
+judges can click," since Railway builds directly from the existing
+`Dockerfile` with no new deployment artifact needed. Supabase remains a
+valid target if ever needed again — the app reads `DATABASE_URL` from env
+exactly the same way regardless of provider (see the `postgres://` →
+`postgresql+psycopg://` normalization below), so switching later is a
+one-variable change, not a code change.
+
+**Real gotcha hit and fixed:** Railway's (and Supabase's) managed Postgres
+hands back a bare `postgres://` or `postgresql://` URL with no driver
+suffix. This app only has `psycopg` (v3) installed, not `psycopg2` — an
+un-normalized URL would make SQLAlchemy default to psycopg2 and fail to
+connect. Fixed with a `field_validator` in `app/config.py` that rewrites the
+scheme to `postgresql+psycopg://` if no driver is already specified, so the
+app boots correctly regardless of which provider set the env var. Covered
+by `tests/test_config.py::test_settings_normalizes_bare_postgres_url_to_psycopg3`.
+
+**How to apply:** don't hardcode a driver-qualified `DATABASE_URL` anywhere
+in deploy docs/scripts going forward — the normalization in `app/config.py`
+already handles it. `railway.json` runs `alembic upgrade head` before
+`uvicorn` on every deploy (mirrors what `docker-compose.yml`'s command
+override already does locally) — migrations are never a separate manual
+step.
+
 ## Each agent is a private LangGraph subgraph, not 3 nodes in one shared graph
 
 The parent graph (`app/graph.py`, `WorkflowState`) has exactly one node per
