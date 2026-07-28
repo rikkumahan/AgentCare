@@ -51,7 +51,12 @@ def run_workflow(
     try:
         for step in _compiled_graph.stream(initial_state, config=config, stream_mode="updates"):
             for node_name, update in step.items():
-                full_state.update(update)
+                # A node that returns {} (a true no-op, e.g. document_agent
+                # when no file was attached) is reported by LangGraph's
+                # "updates" stream mode as None, not {} - dict.update(None)
+                # raises TypeError. Only document_agent can produce this
+                # today; treat it as "no fields changed", not an error.
+                full_state.update(update or {})
                 workflow_run.current_step = node_name
                 workflow_run.state = dict(full_state)
                 db.commit()
