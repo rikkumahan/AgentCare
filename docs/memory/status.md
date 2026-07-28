@@ -16,24 +16,29 @@ just written down in a plan.
 
 **Time budget update (2026-07-27, later in the day): at most 12 hours
 remain for all remaining work.** This cut the achievable scope hard.
-Agreed build order for the remaining budget: (1) Document agent — highest
-scoring weight, 0% built; (2) Follow-up agent — substantial weight, 0%
-built, also builds the first real staff-facing views
-(`problem_statement.md` line 207 requires staff be able to view/act on
-escalations — currently nothing does); (3) intent branching + the "ask
-the patient when unclear" popup + human-readable wording, from
+
+**Build order reordered again (2026-07-27, still later): user explicitly
+chose to de-risk the demo over chasing scoring weight.** Original order was
+Document → Follow-up → intent-branching. User flagged that right now, any
+request that isn't a clean "book an appointment" (reschedule, a general
+question, anything the AI isn't fully confident about) silently escalates
+with nothing shown to the patient — a judge typing a slightly-off-script
+request would hit exactly that dead end. Explicitly said "I cannot risk"
+this. New order: (1) Document agent — nearly done as of this note (8/10
+tasks complete and reviewed, one Important-severity filename-sanitization
+fix in flight on Task 8); (2) intent branching + the "ask the patient when
+unclear" popup + human-readable wording, from
 `docs/superpowers/specs/2026-07-27-intent-branching-clarification-design.md`
-— **minus** that spec's "confirm before booking" pause point, which was
-recommended for cut given the time budget (it reworks the Appointment
-agent's own behavior, the single most expensive remaining piece, and is
-polish on an already-working/tested booking flow rather than a gap in a
-named scoring criterion). **This cut was recommended but not yet
-explicitly confirmed by the user as of this write** — do not delete that
-spec's confirm-before-booking content until they confirm; treat it as
-"very likely cut, pending final word," not settled. (4) Reschedule/cancel
-plain routes, only if time remains — small, tool already supports it.
-Nothing beyond this — no visual polish, no doctor-search, no other
-extensions.
+— **minus** that spec's "confirm before booking" pause point (recommended
+cut, still not explicitly confirmed — same caveat as before, don't delete
+that content yet); (3) Follow-up agent — plan already written
+(11 tasks, `docs/superpowers/plans/2026-07-27-followup-agent.md`), just
+moved after intent-branching instead of before it. Still substantial
+scoring weight and still the only thing that builds the required
+staff-facing views (`problem_statement.md` line 207) — not dropped, just
+reordered. (4) Reschedule/cancel plain routes, only if time remains —
+small, tool already supports it. Nothing beyond this — no visual polish,
+no doctor-search, no other extensions.
 
 Two specs (Document, Follow-up) were cross-checked twice by the user
 directly against the running code before any implementation started, and
