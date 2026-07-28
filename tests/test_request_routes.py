@@ -1010,3 +1010,80 @@ def test_select_appointment_wrong_owner_returns_403(monkeypatch, db_session):
     )
     assert select_resp.status_code == 403
 
+
+def test_select_intent_book_option_reaches_slot_selection(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("cancel_appointment,book_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    cookie = _register_patient("Multi Intent Route Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post(
+        "/requests/new",
+        data={"request_text": "cancel my appointment and book a new one"},
+        follow_redirects=False,
+    )
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    db_session.expire_all()
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    assert workflow_run.status.value == "needs_intent_selection"
+
+    department = make_department(db_session, name=f"Cardio {uuid.uuid4().hex[:8]}")
+    doctor = make_doctor(db_session, department=department)
+    make_appointment_slot(db_session, doctor=doctor)
+
+    routing_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "cardio"}),
+            ai_message_text(department.name),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: routing_model)
+
+    select_resp = client.post(
+        f"/requests/{workflow_run_id}/select-intent",
+        data={"intent": "book_appointment"},
+        follow_redirects=False,
+    )
+    assert select_resp.status_code == 303
+
+    db_session.expire_all()
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    assert workflow_run.status.value == "needs_slot_selection"
+
+
+def test_select_intent_stale_status_is_a_noop_redirect(monkeypatch, db_session):
+    cookie = _register_patient("Stale Intent Patient")
+    client.cookies.set("agentcare_session", cookie)
+    resp = client.post("/requests/new", data={"request_text": "hello"}, follow_redirects=False)
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    select_resp = client.post(
+        f"/requests/{workflow_run_id}/select-intent",
+        data={"intent": "book_appointment"},
+        follow_redirects=False,
+    )
+    assert select_resp.status_code == 303
+    assert select_resp.headers["location"] == f"/requests/{workflow_run_id}"
+
+
+def test_render_patient_message_needs_intent_selection(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    workflow_run = make_workflow_run(db_session, profile=profile)
+    workflow_run.status = WorkflowStatus.needs_intent_selection
+    workflow_run.state = {"intent": "cancel_appointment,book_appointment"}
+    db_session.commit()
+
+    message = _render_patient_message(db_session, user, workflow_run)
+    assert "asking about a few things" in message
+
+

@@ -18,6 +18,8 @@ class WorkflowState(TypedDict):
     needs_clarification: bool
     needs_appointment_reason: bool
     needs_appointment_selection: bool
+    needs_intent_selection: bool
     pending_appointment_action: str | None
     rescheduling_appointment_id: str | None
+
 

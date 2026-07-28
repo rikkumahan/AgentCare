@@ -20,10 +20,12 @@ from app.workflow_runner import (
     continue_as_appointment_action,
     continue_as_booking,
     continue_as_booking_with_department,
+    continue_as_intent_selection,
     continue_as_staff_escalation,
     continue_with_selected_slot,
     run_workflow,
 )
+
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -56,8 +58,11 @@ def _render_patient_message(db: Session, user: User, workflow_run: WorkflowRun) 
     state = workflow_run.state or {}
     workflow_status = workflow_run.status
 
-    if workflow_status == WorkflowStatus.needs_clarification:
+    if workflow_status == WorkflowStatus.needs_intent_selection:
+        message = "It sounds like you're asking about a few things. Which one should I help with first?"
+    elif workflow_status == WorkflowStatus.needs_clarification:
         message = f"Hi {user.name}! I want to make sure I help you with the right thing."
+
     elif workflow_status == WorkflowStatus.needs_appointment_selection:
         message = "Which appointment is this about?"
     elif workflow_status == WorkflowStatus.needs_appointment_reason:
@@ -175,7 +180,16 @@ def request_status(
     appointments = []
     departments = []
     slots = []
-    if workflow_run.status == WorkflowStatus.needs_appointment_selection:
+    detected_intents = []
+    if workflow_run.status == WorkflowStatus.needs_intent_selection:
+        raw_intent = workflow_run.state.get("intent", "")
+        actionable = [
+            label.strip()
+            for label in raw_intent.split(",")
+            if any(kw in label for kw in ("book", "cancel", "reschedule"))
+        ]
+        detected_intents = actionable
+    elif workflow_run.status == WorkflowStatus.needs_appointment_selection:
         appointments = list_patient_appointments(db, str(profile.id))
     elif workflow_run.status == WorkflowStatus.needs_appointment_reason:
         departments = db.query(Department).filter(Department.active.is_(True)).order_by(Department.name).all()
@@ -195,8 +209,33 @@ def request_status(
             "appointments": appointments,
             "departments": departments,
             "slots": slots,
+            "detected_intents": detected_intents,
         },
     )
+
+
+@router.post("/requests/{workflow_run_id}/select-intent")
+def select_intent(
+    workflow_run_id: str,
+    intent: str = Form(...),
+    user: User = Depends(require_role(UserRole.patient.value)),
+    db: Session = Depends(get_db),
+):
+    workflow_run = db.get(WorkflowRun, workflow_run_id)
+    if workflow_run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    profile = _get_or_create_profile(db, user)
+    if workflow_run.patient_id != profile.id:
+        raise HTTPException(status_code=403, detail="Not your request")
+
+    if workflow_run.status != WorkflowStatus.needs_intent_selection:
+        return RedirectResponse(f"/requests/{workflow_run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    continue_as_intent_selection(db, workflow_run, intent)
+
+    return RedirectResponse(f"/requests/{workflow_run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
 
 
 @router.post("/requests/{workflow_run_id}/clarify")

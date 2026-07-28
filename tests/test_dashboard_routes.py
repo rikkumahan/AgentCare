@@ -3,7 +3,8 @@ from fastapi.testclient import TestClient
 
 from app.auth import create_session_token
 from app.main import app
-from app.models import UserRole, WorkflowStatus
+from app.models import Appointment, UserRole, WorkflowStatus
+
 from app.rbac import SESSION_COOKIE_NAME
 from tests.fakes import (
     make_appointment,
@@ -120,3 +121,91 @@ def test_staff_dashboard_lists_escalated_runs(db_session):
     assert "Staff Dashboard" in response.text
     assert "I have chest pain" in response.text
     assert "Emergency keywords detected" in response.text
+
+
+def _login_patient(db_session, name: str):
+    user = make_user(db_session, role=UserRole.patient)
+    user.name = name
+    profile = make_patient_profile(db_session, user=user)
+    token = create_session_token(str(user.id))
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return user, profile
+
+
+def _login_staff(db_session, name: str):
+    user = make_user(db_session, role=UserRole.staff)
+    user.name = name
+    db_session.commit()
+    token = create_session_token(str(user.id))
+    client.cookies.set(SESSION_COOKIE_NAME, token)
+    return user
+
+
+def test_my_appointments_page_lists_real_appointments(db_session):
+    user, profile = _login_patient(db_session, "Appointments Page Patient")
+
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    resp = client.get("/appointments")
+    assert resp.status_code == 200
+    assert doctor.name in resp.text
+
+
+def test_cancel_from_appointments_page_redirects_to_request_status(db_session):
+    user, profile = _login_patient(db_session, "Cancel Page Patient")
+
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    resp = client.post(f"/appointments/{appointment.id}/cancel", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/requests/")
+
+    db_session.expire_all()
+    refreshed = db_session.get(Appointment, appointment.id)
+    assert refreshed.status.value == "cancelled"
+
+
+def test_cancel_someone_elses_appointment_returns_403(db_session):
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    other_profile = make_patient_profile(db_session)
+    appointment = make_appointment(db_session, patient=other_profile, doctor=doctor, slot=slot)
+
+    _login_patient(db_session, "Not The Owner")
+
+    resp = client.post(f"/appointments/{appointment.id}/cancel")
+    assert resp.status_code == 403
+
+
+def test_cancel_nonexistent_appointment_returns_404(db_session):
+    _login_patient(db_session, "404 Test Patient")
+
+    resp = client.post(f"/appointments/{uuid.uuid4()}/cancel")
+    assert resp.status_code == 404
+
+
+def test_staff_appointments_page_shows_grouped_schedule(db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    profile = make_patient_profile(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    _login_staff(db_session, "Staff Viewer")
+
+    resp = client.get("/staff/appointments")
+    assert resp.status_code == 200
+    assert doctor.name in resp.text
+
+
+def test_staff_appointments_page_rejects_patients(db_session):
+    _login_patient(db_session, "Not Staff")
+
+    resp = client.get("/staff/appointments")
+    assert resp.status_code == 403
+
+

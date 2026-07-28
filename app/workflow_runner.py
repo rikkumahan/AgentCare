@@ -82,8 +82,11 @@ def run_workflow(
 
     if full_state.get("escalation"):
         workflow_run.status = WorkflowStatus.needs_review
+    elif full_state.get("needs_intent_selection"):
+        workflow_run.status = WorkflowStatus.needs_intent_selection
     elif full_state.get("needs_clarification"):
         workflow_run.status = WorkflowStatus.needs_clarification
+
     elif full_state.get("needs_appointment_selection"):
         return _land_on_appointment_selection_or_none(db, workflow_run, full_state)
     elif full_state.get("needs_appointment_reason"):
@@ -207,6 +210,26 @@ def continue_as_booking(db, workflow_run: WorkflowRun, override_request_text: st
     return _land_on_slots_or_no_slots(db, workflow_run, full_state, full_state["department_id"])
 
 
+def continue_as_intent_selection(db, workflow_run: WorkflowRun, chosen_intent: str) -> WorkflowRun:
+    """needs_intent_selection -> patient picked which of the detected
+    intents to handle first. Dispatches to whichever existing, unmodified
+    continuation the single-intent graph path would have used for that
+    label - no new booking/cancel/reschedule logic here, only routing to
+    code that already exists and is already tested."""
+    chosen = chosen_intent.strip().lower()
+    full_state = dict(workflow_run.state)
+
+    if "book" in chosen:
+        return continue_as_booking(db, workflow_run)
+
+    action = "cancel" if "cancel" in chosen else "reschedule"
+    full_state["pending_appointment_action"] = action
+    workflow_run.state = full_state
+    db.commit()
+    return _land_on_appointment_selection_or_none(db, workflow_run, full_state)
+
+
+
 def continue_as_booking_with_department(db, workflow_run: WorkflowRun, department_id: str) -> WorkflowRun:
     """needs_appointment_reason -> patient picked a real department directly
     from the buttons shown (not free text). Skips routing_agent entirely -
@@ -250,7 +273,55 @@ def continue_with_selected_slot(db, workflow_run: WorkflowRun, slot_id: str) -> 
     return workflow_run
 
 
+def start_appointment_action(
+    db, patient_id: str, action: str, appointment_id: str, user_id: str | None = None
+) -> WorkflowRun:
+    """Entry point from the My Appointments page - the patient already
+    picked both the action (Cancel/Reschedule button) and the target
+    appointment (which row they clicked) with zero ambiguity, so this skips
+    Safety/Coordinator/the graph entirely (there is no free text to
+    classify) and seeds a WorkflowRun directly at needs_appointment_selection
+    - the same state run_workflow lands on after a typed "cancel my
+    appointment" request. continue_as_appointment_action (unchanged) takes
+    it from there; this function's only job is constructing that starting
+    state."""
+    workflow_run = WorkflowRun(
+        patient_id=uuid.UUID(patient_id),
+        current_step="needs_appointment_selection",
+        state={},
+        status=WorkflowStatus.needs_appointment_selection,
+    )
+    db.add(workflow_run)
+    db.commit()
+
+    full_state = {
+        "workflow_run_id": str(workflow_run.id),
+        "patient_id": patient_id,
+        "user_id": user_id,
+        "request_text": f"[My Appointments page] {action} appointment",
+        "uploaded_files": [],
+        "intent": f"{action}_appointment",
+        "department_id": None,
+        "appointment_id": None,
+        "document_ids": [],
+        "missing_document_types": [],
+        "reminder_ids": [],
+        "escalation": None,
+        "status": WorkflowStatus.needs_appointment_selection.value,
+        "needs_clarification": False,
+        "needs_appointment_reason": False,
+        "needs_appointment_selection": True,
+        "pending_appointment_action": action,
+        "rescheduling_appointment_id": None,
+    }
+    workflow_run.state = full_state
+    db.commit()
+
+    return continue_as_appointment_action(db, workflow_run, appointment_id)
+
+
 def continue_as_appointment_action(db, workflow_run: WorkflowRun, appointment_id: str) -> WorkflowRun:
+
     """needs_appointment_selection -> patient picked which real appointment
     they mean. Branches on the action recorded when the graph set
     needs_appointment_selection:

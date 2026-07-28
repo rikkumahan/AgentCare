@@ -8,7 +8,17 @@ from langgraph.prebuilt import InjectedState
 from sqlalchemy.orm import Session
 
 from app.audit import audited
-from app.models import Appointment, AppointmentSlot, AppointmentStatus, Department, Doctor, SlotStatus
+from app.models import (
+    Appointment,
+    AppointmentSlot,
+    AppointmentStatus,
+    Department,
+    Doctor,
+    PatientProfile,
+    SlotStatus,
+    User,
+)
+
 
 
 def _appointment_dict(appointment: Appointment, slot: AppointmentSlot | None) -> dict:
@@ -64,6 +74,43 @@ def list_patient_appointments(db: Session, patient_id: str) -> list[dict]:
         if details:
             result.append({"appointment_id": str(appointment.id), **details})
     return sorted(result, key=lambda r: r["formatted_time"])
+
+
+def list_active_appointments_grouped_by_doctor(db: Session) -> list[dict]:
+    """Read-only staff view: every active appointment (pending, confirmed,
+    rescheduled - same status filter as list_patient_appointments), grouped
+    by doctor. Plain query + Python grouping, not an agentic tool - staff
+    are looking, not acting."""
+    rows = (
+        db.query(Appointment, AppointmentSlot, Doctor, Department, PatientProfile, User)
+        .join(AppointmentSlot, Appointment.slot_id == AppointmentSlot.id)
+        .join(Doctor, Appointment.doctor_id == Doctor.id)
+        .join(Department, Doctor.department_id == Department.id)
+        .join(PatientProfile, Appointment.patient_id == PatientProfile.id)
+        .join(User, PatientProfile.user_id == User.id)
+        .filter(
+            Appointment.status.in_(
+                [AppointmentStatus.pending, AppointmentStatus.confirmed, AppointmentStatus.rescheduled]
+            )
+        )
+        .order_by(Doctor.name, AppointmentSlot.start_time)
+        .all()
+    )
+
+    grouped: dict[str, dict] = {}
+    for appointment, slot, doctor, department, profile, user in rows:
+        key = str(doctor.id)
+        if key not in grouped:
+            grouped[key] = {"doctor_name": doctor.name, "department_name": department.name, "appointments": []}
+        grouped[key]["appointments"].append(
+            {
+                "patient_name": user.name,
+                "formatted_time": slot.start_time.strftime("%B %d, %Y at %I:%M %p"),
+                "status": appointment.status.value,
+            }
+        )
+    return sorted(grouped.values(), key=lambda d: d["doctor_name"])
+
 
 
 @audited("check_slot_availability", "AppointmentSlot")

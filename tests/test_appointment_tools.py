@@ -1,8 +1,22 @@
 from datetime import datetime, timedelta, timezone
 
 from app.models import Appointment, AppointmentSlot, AppointmentStatus, AuditEvent, Doctor, SlotStatus
-from app.tools.appointment_tools import _slots_summary, book_or_modify_appointment, check_slot_availability, list_patient_appointments
-from tests.fakes import make_appointment, make_appointment_slot, make_department, make_doctor, make_patient_profile
+from app.tools.appointment_tools import (
+    _slots_summary,
+    book_or_modify_appointment,
+    check_slot_availability,
+    list_active_appointments_grouped_by_doctor,
+    list_patient_appointments,
+)
+from tests.fakes import (
+    make_appointment,
+    make_appointment_slot,
+    make_department,
+    make_doctor,
+    make_patient_profile,
+    make_user,
+)
+
 
 
 
@@ -218,4 +232,47 @@ def test_list_patient_appointments_returns_active_appointments_only(db_session):
     appt_ids = {a["appointment_id"] for a in appts}
     assert str(appt_confirmed.id) in appt_ids
     assert str(appt_rescheduled.id) in appt_ids
+
+
+def test_list_active_appointments_grouped_by_doctor_groups_correctly(db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+
+    user1 = make_user(db_session)
+    user1.name = "Alice Patient"
+    profile1 = make_patient_profile(db_session, user=user1)
+    user2 = make_user(db_session)
+    user2.name = "Bob Patient"
+    profile2 = make_patient_profile(db_session, user=user2)
+    db_session.commit()
+
+    slot1 = make_appointment_slot(db_session, doctor=doctor)
+    slot2 = make_appointment_slot(db_session, doctor=doctor)
+    slot3 = make_appointment_slot(db_session, doctor=doctor)
+
+    make_appointment(db_session, patient=profile1, doctor=doctor, slot=slot1, status=AppointmentStatus.confirmed)
+    make_appointment(db_session, patient=profile2, doctor=doctor, slot=slot2, status=AppointmentStatus.rescheduled)
+    make_appointment(db_session, patient=profile1, doctor=doctor, slot=slot3, status=AppointmentStatus.cancelled)
+
+    grouped = list_active_appointments_grouped_by_doctor(db_session)
+
+    doc_entry = next(d for d in grouped if d["doctor_name"] == doctor.name)
+    assert doc_entry["department_name"] == department.name
+    assert len(doc_entry["appointments"]) == 2
+    patient_names = {a["patient_name"] for a in doc_entry["appointments"]}
+    assert patient_names == {"Alice Patient", "Bob Patient"}
+
+
+def test_list_active_appointments_grouped_by_doctor_excludes_cancelled_appointments(db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    profile = make_patient_profile(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot, status=AppointmentStatus.cancelled)
+
+    grouped = list_active_appointments_grouped_by_doctor(db_session)
+    doctor_names = {d["doctor_name"] for d in grouped}
+    assert doctor.name not in doctor_names
+
+
 

@@ -17,9 +17,18 @@ COORDINATOR_SYSTEM_PROMPT = (
     "none are mentioned). After the tool result comes back, reply with a "
     "one to three word administrative intent label for the request, for "
     "example: book_appointment, reschedule_appointment, "
-    "cancel_appointment, submit_document, general_inquiry. Never diagnose "
-    "or suggest treatment — only classify the administrative intent."
+    "cancel_appointment, submit_document, general_inquiry. If — and only "
+    "if — the request genuinely contains two or more distinct "
+    "administrative asks (e.g. \"cancel my appointment and book a new one\" "
+    "or \"reschedule my visit and also cancel my other booking\"), reply "
+    "instead with all the distinct intent labels separated by commas and "
+    "nothing else, for example: cancel_appointment,book_appointment. Do not "
+    "split a single request into multiple labels just because it has "
+    "multiple sentences or extra detail — only when there are genuinely "
+    "separate administrative actions being requested. Never diagnose or "
+    "suggest treatment — only classify the administrative intent(s)."
 )
+
 
 coordinator_tools = [get_or_create_patient_tool]
 coordinator_tools_node = ToolNode(coordinator_tools)

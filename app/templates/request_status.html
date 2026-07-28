@@ -18,7 +18,23 @@
     </form>
 </div>
 {% endif %}
+{% if workflow_run.status.value == "needs_intent_selection" %}
+<div style="margin-top: 16px; margin-bottom: 24px; display: flex; flex-wrap: wrap; gap: 10px;">
+    {% for label in detected_intents %}
+    <form method="post" action="/requests/{{ workflow_run.id }}/select-intent" style="display:inline">
+        <input type="hidden" name="intent" value="{{ label }}">
+        <button type="submit" style="padding: 10px 16px; background-color: #0066cc; color: white; border: none; border-radius: 4px; font-weight: 500; cursor: pointer;">
+            {% if "book" in label %}Book an appointment
+            {% elif "cancel" in label %}Cancel an appointment
+            {% elif "reschedule" in label %}Reschedule an appointment
+            {% endif %}
+        </button>
+    </form>
+    {% endfor %}
+</div>
+{% endif %}
 {% if workflow_run.status.value == "needs_appointment_selection" %}
+
 <div style="margin-top: 16px; margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px;">
     {% for appt in appointments %}
     <form method="post" action="/requests/{{ workflow_run.id }}/select-appointment" style="display:inline">

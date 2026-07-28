@@ -153,3 +153,43 @@ def test_document_agent_node_skips_a_failed_upload_id(monkeypatch, db_session):
     update = document_agent_node(state, config={"configurable": {"db": db_session}})
 
     assert update["document_ids"] == []
+
+
+def test_document_agent_node_processes_multiple_uploaded_files(monkeypatch, tmp_path, db_session):
+    profile = make_patient_profile(db_session)
+    file_a = tmp_path / "insurance.pdf"
+    file_a.write_bytes(b"insurance-bytes")
+    file_b = tmp_path / "prescription.pdf"
+    file_b.write_bytes(b"prescription-bytes")
+
+    fake_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call(
+                "store_and_classify_document_tool",
+                {"file_path": str(file_a), "document_type": "insurance"},
+            ),
+            ai_message_text("Saved insurance document."),
+            ai_message_with_tool_call(
+                "store_and_classify_document_tool",
+                {"file_path": str(file_b), "document_type": "prescription_old"},
+            ),
+            ai_message_text("Saved prescription document."),
+        ]
+    )
+    monkeypatch.setattr("app.agents.document.get_llm", lambda: fake_model)
+
+    from app.agents.document import document_agent_node
+
+    state = workflow_state(patient_id=str(profile.id), uploaded_files=[str(file_a), str(file_b)])
+    update = document_agent_node(state, config={"configurable": {"db": db_session}})
+
+    assert len(update["document_ids"]) == 2
+    types = {
+        db_session.query(PatientDocument)
+        .filter(PatientDocument.id == uuid.UUID(doc_id))
+        .one()
+        .document_type.value
+        for doc_id in update["document_ids"]
+    }
+    assert types == {"insurance", "prescription_old"}
+

@@ -147,6 +147,8 @@ class WorkflowStatus(str, enum.Enum):
     needs_appointment_reason = "needs_appointment_reason"
     needs_slot_selection = "needs_slot_selection"
     needs_appointment_selection = "needs_appointment_selection"
+    needs_intent_selection = "needs_intent_selection"
+
 
 
 class WorkflowRun(Base):

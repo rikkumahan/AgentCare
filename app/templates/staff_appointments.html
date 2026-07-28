@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Appointments - AgentCare{% endblock %}
+{% block content %}
+<h1 style="margin-top: 0;">Appointment Schedule</h1>
+{% if grouped %}
+{% for doc in grouped %}
+<div style="margin-top: 20px;">
+    <h2 style="margin-bottom: 4px;">{{ doc.doctor_name }} <span style="font-weight: normal; color: #666; font-size: 15px;">— {{ doc.department_name }}</span></h2>
+    <table border="1" cellpadding="8" cellspacing="0" style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background-color: #f2f2f2;">
+                <th style="text-align: left;">Patient</th>
+                <th style="text-align: left;">Time</th>
+                <th style="text-align: left;">Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for appt in doc.appointments %}
+            <tr>
+                <td>{{ appt.patient_name }}</td>
+                <td>{{ appt.formatted_time }}</td>
+                <td>{{ appt.status }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+{% else %}
+<div style="padding: 20px; background-color: #f8f9fa; border-radius: 6px;">
+    <p style="margin: 0;">No active appointments scheduled.</p>
+</div>
+{% endif %}
+{% endblock %}

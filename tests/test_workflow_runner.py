@@ -15,6 +15,7 @@ from app.workflow_runner import (
     continue_as_appointment_action,
     continue_as_booking,
     continue_as_booking_with_department,
+    continue_as_intent_selection,
     continue_as_staff_escalation,
     continue_with_selected_slot,
     run_workflow,
@@ -628,4 +629,92 @@ def test_continue_with_selected_slot_reschedules_existing_appointment(db_session
     assert fetched_appointment.slot_id == slot2.id
     freed_slot = db_session.get(AppointmentSlot, slot1.id)
     assert freed_slot.status == SlotStatus.open
+
+
+def test_start_appointment_action_cancel_reaches_completed(db_session):
+    from app.workflow_runner import start_appointment_action
+
+    profile = make_patient_profile(db_session)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = start_appointment_action(db_session, str(profile.id), "cancel", str(appointment.id))
+
+    assert workflow_run.status == WorkflowStatus.completed
+    assert workflow_run.state["pending_appointment_action"] == "cancel"
+    db_session.refresh(appointment)
+    assert appointment.status.value == "cancelled"
+
+
+def test_start_appointment_action_reschedule_reaches_slot_selection(db_session):
+    from app.workflow_runner import start_appointment_action
+
+    profile = make_patient_profile(db_session)
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment_slot(db_session, doctor=doctor)  # a second open slot to reschedule into
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = start_appointment_action(db_session, str(profile.id), "reschedule", str(appointment.id))
+
+    assert workflow_run.status == WorkflowStatus.needs_slot_selection
+    assert workflow_run.state["rescheduling_appointment_id"] == str(appointment.id)
+
+
+def test_continue_as_intent_selection_book_delegates_to_continue_as_booking(monkeypatch, db_session):
+    department = make_department(db_session, name=f"Cardiology {uuid.uuid4().hex[:8]}")
+    doctor = make_doctor(db_session, department=department)
+    make_appointment_slot(db_session, doctor=doctor)
+
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    workflow_run = _needs_clarification_run(db_session, profile, user, request_text="book a cardiology appointment")
+
+    fake_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "cardiology"}),
+            ai_message_text(department.name),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: fake_model)
+
+    result = continue_as_intent_selection(db_session, workflow_run, "book_appointment")
+
+    assert result.status == WorkflowStatus.needs_slot_selection
+    assert result.state["department_id"] == str(department.id)
+
+
+def test_continue_as_intent_selection_cancel_lands_on_appointment_selection(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = _needs_clarification_run(db_session, profile, user)
+
+    result = continue_as_intent_selection(db_session, workflow_run, "cancel_appointment")
+
+    assert result.status == WorkflowStatus.needs_appointment_selection
+    assert result.state["pending_appointment_action"] == "cancel"
+
+
+def test_continue_as_intent_selection_reschedule_lands_on_appointment_selection(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = _needs_clarification_run(db_session, profile, user)
+
+    result = continue_as_intent_selection(db_session, workflow_run, "reschedule_appointment")
+
+    assert result.status == WorkflowStatus.needs_appointment_selection
+    assert result.state["pending_appointment_action"] == "reschedule"
+
+
+
 

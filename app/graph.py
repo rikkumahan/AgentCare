@@ -17,8 +17,10 @@ def route_after_safety(state: WorkflowState) -> Literal["coordinator_agent", "__
 
 def route_after_document(
     state: WorkflowState,
-) -> Literal["routing_agent", "needs_appointment_selection", "needs_clarification"]:
+) -> Literal["routing_agent", "needs_appointment_selection", "needs_intent_selection", "needs_clarification"]:
     intent = (state.get("intent") or "").strip().lower()
+    if "," in intent:
+        return "needs_intent_selection"
     if intent == "book_appointment" or "book" in intent:
         return "routing_agent"
     if "cancel" in intent or "reschedule" in intent:
@@ -34,6 +36,10 @@ def needs_appointment_selection_node(state: WorkflowState, config) -> dict:
     intent = (state.get("intent") or "").strip().lower()
     action = "cancel" if "cancel" in intent else "reschedule"
     return {"needs_appointment_selection": True, "pending_appointment_action": action}
+
+
+def needs_intent_selection_node(state: WorkflowState, config) -> dict:
+    return {"needs_intent_selection": True}
 
 
 def build_graph():
@@ -52,6 +58,7 @@ def build_graph():
     graph.add_node("document_agent", document_agent_node)
     graph.add_node("needs_clarification", needs_clarification_node)
     graph.add_node("needs_appointment_selection", needs_appointment_selection_node)
+    graph.add_node("needs_intent_selection", needs_intent_selection_node)
     graph.add_node("routing_agent", routing_agent_node)
 
     graph.set_entry_point("safety_agent")
@@ -65,11 +72,13 @@ def build_graph():
         {
             "routing_agent": "routing_agent",
             "needs_appointment_selection": "needs_appointment_selection",
+            "needs_intent_selection": "needs_intent_selection",
             "needs_clarification": "needs_clarification",
         },
     )
     graph.add_edge("needs_clarification", END)
     graph.add_edge("needs_appointment_selection", END)
+    graph.add_edge("needs_intent_selection", END)
     graph.add_edge("routing_agent", END)
 
     return graph.compile()

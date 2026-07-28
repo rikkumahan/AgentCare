@@ -25,14 +25,17 @@
             {% if user %}
                 {% if user.role.value == 'patient' %}
                     <a href="/dashboard">Dashboard</a>
+                    <a href="/appointments">My Appointments</a>
                     <a href="/requests/new">+ New Request</a>
                 {% elif user.role.value == 'staff' %}
                     <a href="/staff/dashboard">Staff Dashboard</a>
+                    <a href="/staff/appointments" target="_blank">Appointments</a>
                 {% endif %}
                 <form method="post" action="/logout" style="display:inline;">
                     <button type="submit">Log out</button>
                 </form>
             {% else %}
+
                 <a href="/login">Login</a>
                 <a href="/register">Register</a>
             {% endif %}
