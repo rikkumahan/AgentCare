@@ -8,6 +8,7 @@
     <li>Intent: {{ workflow_run.state.get("intent") }}</li>
     <li>Department: {{ workflow_run.state.get("department_id") }}</li>
     <li>Appointment: {{ workflow_run.state.get("appointment_id") }}</li>
+    <li>Documents: {{ workflow_run.state.get("document_ids") }}</li>
     <li>Escalation: {{ workflow_run.state.get("escalation") }}</li>
 </ul>
 <a href="/requests/new">Submit another request</a>
