@@ -1,10 +1,11 @@
+import os
 import uuid
 
 from fastapi.testclient import TestClient
 
 from app.auth import hash_password
 from app.main import app
-from app.models import Appointment, User, UserRole, WorkflowRun
+from app.models import Appointment, PatientProfile, User, UserRole, WorkflowRun
 from tests.fakes import (
     FakeToolCallingModel,
     ai_message_text,
@@ -12,6 +13,7 @@ from tests.fakes import (
     make_appointment_slot,
     make_department,
     make_doctor,
+    make_workflow_run,
 )
 
 client = TestClient(app)
@@ -106,6 +108,56 @@ def test_patient_submits_request_and_sees_real_booking_result(monkeypatch, db_se
     assert workflow_run.status.value == "running"
     appointment = db_session.query(Appointment).filter(Appointment.id == workflow_run.state["appointment_id"]).one()
     assert appointment.status.value == "confirmed"
+
+
+def test_submit_request_with_document_saves_file_and_passes_path_to_workflow(monkeypatch, db_session, tmp_path):
+    monkeypatch.setattr("app.config.settings.storage_dir", str(tmp_path))
+
+    captured = {}
+
+    def fake_run_workflow(db, patient_id, user_id, request_text, uploaded_files=None):
+        captured["patient_id"] = patient_id
+        captured["uploaded_files"] = uploaded_files
+        profile = db.get(PatientProfile, uuid.UUID(patient_id))
+        return make_workflow_run(db, profile=profile)
+
+    monkeypatch.setattr("app.routes.request_routes.run_workflow", fake_run_workflow)
+
+    cookie = _register_patient("Doc Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post(
+        "/requests/new",
+        data={"request_text": "here is my insurance card"},
+        files={"document": ("insurance.pdf", b"pdf-bytes-content", "application/pdf")},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    assert captured["uploaded_files"] is not None
+    assert len(captured["uploaded_files"]) == 1
+    saved_path = captured["uploaded_files"][0]
+    assert saved_path.startswith(os.path.join(str(tmp_path), captured["patient_id"]))
+    with open(saved_path, "rb") as f:
+        assert f.read() == b"pdf-bytes-content"
+
+
+def test_submit_request_without_document_passes_no_uploaded_files(monkeypatch, db_session):
+    captured = {}
+
+    def fake_run_workflow(db, patient_id, user_id, request_text, uploaded_files=None):
+        captured["uploaded_files"] = uploaded_files
+        profile = db.get(PatientProfile, uuid.UUID(patient_id))
+        return make_workflow_run(db, profile=profile)
+
+    monkeypatch.setattr("app.routes.request_routes.run_workflow", fake_run_workflow)
+
+    cookie = _register_patient("No Doc Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post("/requests/new", data={"request_text": "just a question"}, follow_redirects=False)
+    assert resp.status_code == 303
+    assert captured["uploaded_files"] == []
 
 
 def test_resubmitting_the_same_request_quickly_does_not_run_the_workflow_twice(monkeypatch, db_session):

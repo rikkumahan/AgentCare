@@ -1,10 +1,13 @@
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.models import PatientProfile, User, UserRole, WorkflowRun
 from app.rbac import require_role
@@ -40,6 +43,7 @@ def new_request_form(request: Request, user: User = Depends(require_role(UserRol
 @router.post("/requests/new")
 def submit_request(
     request_text: str = Form(...),
+    document: UploadFile | None = File(None),
     user: User = Depends(require_role(UserRole.patient.value)),
     db: Session = Depends(get_db),
 ):
@@ -60,11 +64,21 @@ def submit_request(
         # booking) for what is almost certainly one intended request.
         return RedirectResponse(f"/requests/{recent.id}", status_code=status.HTTP_303_SEE_OTHER)
 
+    uploaded_files: list[str] = []
+    if document is not None and document.filename:
+        patient_dir = os.path.join(settings.storage_dir, str(profile.id))
+        os.makedirs(patient_dir, exist_ok=True)
+        saved_path = os.path.join(patient_dir, f"{uuid.uuid4().hex}_{document.filename}")
+        with open(saved_path, "wb") as f:
+            f.write(document.file.read())
+        uploaded_files = [saved_path]
+
     workflow_run = run_workflow(
         db,
         patient_id=str(profile.id),
         user_id=str(user.id),
         request_text=request_text,
+        uploaded_files=uploaded_files,
     )
     return RedirectResponse(f"/requests/{workflow_run.id}", status_code=status.HTTP_303_SEE_OTHER)
 
