@@ -10,9 +10,38 @@ just written down in a plan.
 | 1. Foundation (Docker+Postgres, 11-table schema+Alembic, auth+RBAC, seed data) | ✅ Done | `docs/superpowers/plans/2026-07-22-foundation.md` |
 | 2. Core agent loop (Safety + Coordinator agents as private LangGraph subgraphs, 2-node parent graph, per-node checkpointing, audited tools) | ✅ Done — validated against real Groq API | `docs/superpowers/plans/2026-07-23-core-agent-loop.md` |
 | 3. Department Routing + Appointment agents | ✅ Done — 64/64 tests passing (real DB) | `docs/superpowers/plans/2026-07-25-routing-appointment-agents.md` |
-| 4. Document agent | ⬜ Not started | not yet written |
-| 5. Follow-up agent + second Safety pass + audit/error-handling hardening | ⬜ Not started | not yet written |
+| 4. Document agent | ⬜ Spec done, plan being written by background subagent | `docs/superpowers/plans/2026-07-27-document-agent.md` (in progress) |
+| 5. Follow-up agent + staff escalation/reminder views | ⬜ Spec done, plan being written by background subagent | `docs/superpowers/plans/2026-07-27-followup-agent.md` (in progress) |
 | 6. UI polish, seed data realism, demo pass | ⬜ Not started | not yet written |
+
+**Time budget update (2026-07-27, later in the day): at most 12 hours
+remain for all remaining work.** This cut the achievable scope hard.
+Agreed build order for the remaining budget: (1) Document agent — highest
+scoring weight, 0% built; (2) Follow-up agent — substantial weight, 0%
+built, also builds the first real staff-facing views
+(`problem_statement.md` line 207 requires staff be able to view/act on
+escalations — currently nothing does); (3) intent branching + the "ask
+the patient when unclear" popup + human-readable wording, from
+`docs/superpowers/specs/2026-07-27-intent-branching-clarification-design.md`
+— **minus** that spec's "confirm before booking" pause point, which was
+recommended for cut given the time budget (it reworks the Appointment
+agent's own behavior, the single most expensive remaining piece, and is
+polish on an already-working/tested booking flow rather than a gap in a
+named scoring criterion). **This cut was recommended but not yet
+explicitly confirmed by the user as of this write** — do not delete that
+spec's confirm-before-booking content until they confirm; treat it as
+"very likely cut, pending final word," not settled. (4) Reschedule/cancel
+plain routes, only if time remains — small, tool already supports it.
+Nothing beyond this — no visual polish, no doctor-search, no other
+extensions.
+
+Two specs (Document, Follow-up) were cross-checked twice by the user
+directly against the running code before any implementation started, and
+both found and fixed real gaps — see `docs/memory/gotchas.md` for the
+full list (`SessionLocal`-vs-resolved-`db` regression risk in a spec, and
+an `AppointmentStatus.rescheduled` filter gap that hit three call sites,
+including one already-shipped Phase 3 bug in `_conflicting_appointment`,
+now fixed with a regression test).
 
 Design spec (source of truth for the full architecture, all 6 agents,
 data model): `docs/superpowers/specs/2026-07-22-agentcare-design.md`.
