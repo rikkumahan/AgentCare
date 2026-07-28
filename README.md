@@ -6,8 +6,10 @@ for the full spec).
 
 AgentCare is not a diagnosis or treatment system. It handles the
 administrative side of a patient's journey — registration, department
-routing, appointment booking, document collection, reminders, and
-follow-up — while keeping every medical decision under human supervision.
+routing, appointment booking/rescheduling/cancelling, and document
+collection — while keeping every medical decision under human supervision.
+Reminders and automated follow-up are designed but not yet built (see
+Architecture below).
 
 ## What it does
 
@@ -20,36 +22,61 @@ The system runs this through a LangGraph workflow of cooperating agents that:
 1. identify or create the patient record,
 2. check the request for diagnosis/prescription/emergency language and escalate
    if needed,
-3. detect the administrative intent(s) and ask the patient to disambiguate if
-   more than one is present,
+3. detect the administrative intent(s) — if the request contains more than
+   one distinct ask (e.g. "cancel my old appointment and book a new one"),
+   the patient is asked which to handle first, then automatically offered
+   the rest once the first one finishes, instead of silently dropping it,
 4. route the request to the correct department,
-5. find available slots, check conflicts, and book/reschedule/cancel the
-   appointment,
+5. find real available slots and let the patient pick one — booking,
+   rescheduling, and cancelling are deterministic actions on real DB rows
+   the patient clicks through, never an LLM guessing on their behalf,
 6. ingest and classify attached documents, detect duplicates/missing
    requirements,
 7. persist the full workflow state after every step,
 8. render a confirmation from the rows just written to the database (never a
-   hardcoded string),
-9. create reminders and flag incomplete workflows for follow-up.
+   hardcoded string).
+
+Patients also have a dedicated **My Appointments** page to cancel or
+reschedule an existing appointment directly, without typing a new request.
+Staff have a read-only **appointment schedule** view grouped by doctor.
 
 ## Architecture
 
-**Orchestration:** LangGraph. Each agent below is its own graph node with its
-own system prompt and its own bound tools (LangChain `@tool` + prebuilt
-`ToolNode`). The Coordinator subgraph drives intent detection and delegates
-to the others; the top-level graph in [`app/graph.py`](app/graph.py) wires
-Safety → Coordinator → Document → Routing/Appointment, with dedicated nodes
-for the states where the workflow pauses for patient input (clarification,
-intent selection, slot/appointment selection).
+**Orchestration:** LangGraph. Each LLM-driven agent below is its own graph
+node with its own system prompt and its own bound tools (LangChain `@tool` +
+prebuilt `ToolNode`). The top-level graph in [`app/graph.py`](app/graph.py)
+wires Safety → Coordinator → Document → Routing, with dedicated nodes for
+every state where the workflow pauses for patient input (clarification,
+intent selection, department selection, appointment selection, slot
+selection). Once a department or a target appointment is known, everything
+downstream — checking availability, booking, rescheduling, cancelling — is
+**deterministic, patient-driven code, not an LLM decision**: the patient
+sees a real list of departments/slots/appointments queried straight from
+Postgres and clicks the one they want. This was a deliberate design choice
+made partway through the build (see
+[`docs/memory/decisions.md`](docs/memory/decisions.md)): once real,
+unambiguous data exists, letting a model guess which row to pick adds risk
+with no benefit over a button.
 
 | Agent | File | Responsibility | Tools |
 |---|---|---|---|
 | **Safety & Escalation** | [`app/agents/safety.py`](app/agents/safety.py) | Runs first; blocks diagnosis/prescription/dosage language and emergency requests; creates escalation records | [`create_escalation`](app/tools/escalation_tools.py) |
-| **Coordinator** | [`app/agents/coordinator.py`](app/agents/coordinator.py) | Detects intent(s), opens/resumes the `WorkflowRun`, delegates in order, combines outputs, renders the final confirmation from persisted rows | [`get_or_create_patient`](app/tools/patient_tools.py) |
+| **Coordinator** | [`app/agents/coordinator.py`](app/agents/coordinator.py) | Detects intent(s) (including genuinely multi-intent requests), opens/resumes the `WorkflowRun`, delegates in order | [`get_or_create_patient`](app/tools/patient_tools.py) |
 | **Department Routing** | [`app/agents/routing.py`](app/agents/routing.py) | Classifies the request against the live department list, handles ambiguity, escalates unsupported requests | [`lookup_departments`](app/tools/department_tools.py) |
-| **Appointment** | [`app/agents/appointment.py`](app/agents/appointment.py) | Availability, conflict checks, book/reschedule/cancel | [`check_slot_availability`, `book_or_modify_appointment`](app/tools/appointment_tools.py) |
 | **Document** | [`app/agents/document.py`](app/agents/document.py) | Ingest, classify, checksum, duplicate/missing-document detection, maps files to the patient | [`store_and_classify_document`](app/tools/document_tools.py) |
-| **Follow-up** | [`app/tools/`](app/tools) (reminder + scan tools, invoked from the workflow runner) | Appointment reminders, post-visit tasks, scans for missed/incomplete workflows | `create_reminder`, `scan_incomplete_workflows` |
+
+**Appointment tools** ([`app/tools/appointment_tools.py`](app/tools/appointment_tools.py)) —
+`check_slot_availability`, `book_or_modify_appointment` — are real,
+audited, and used on every booking/reschedule/cancel, but are invoked
+directly from [`app/workflow_runner.py`](app/workflow_runner.py) once the
+patient clicks a real slot or appointment, not from an LLM-driven agent
+node. `app/agents/appointment.py` exists from an earlier design iteration
+but is not wired into the current graph.
+
+**Follow-up agent** — reminders and incomplete-workflow scanning — is
+specced (see [`docs/superpowers/specs/`](docs/superpowers/specs)) but not
+yet implemented. `Reminder` and the relevant schema exist in
+[`app/models.py`](app/models.py); nothing writes to that table yet.
 
 Every tool above is wrapped by an audit decorator that writes an `AuditEvent`
 row on every call (success or failure) — the audit trail doesn't depend on an
@@ -72,8 +99,9 @@ across restarts), `Reminder`, `Escalation`, `AuditEvent`.
 **Documents:** stored on the local filesystem under `./storage/<patient_id>/...`,
 with checksum + path + type recorded on `PatientDocument`.
 
-**Reminders:** persisted `Reminder` rows with an audit trail; delivery is
-simulated (log + in-app), not real SMTP/SMS.
+**Reminders:** schema exists (`Reminder` model, delivery designed to be
+simulated — log + in-app, not real SMTP/SMS) but nothing creates rows in it
+yet — see the Follow-up agent note above.
 
 ## Running it
 
