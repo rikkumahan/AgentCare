@@ -42,6 +42,30 @@ def appointment_display_details(db: Session, appointment_id: str) -> dict | None
     }
 
 
+def list_patient_appointments(db: Session, patient_id: str) -> list[dict]:
+    """Real DB query: this patient's own active appointments (not
+    cancelled), enriched with doctor/department/time for display - same
+    enrichment shape as appointment_display_details, but for a list instead
+    of one row. Used to render the needs_appointment_selection screen; the
+    patient picks by clicking, nothing here is a guess."""
+    rows = (
+        db.query(Appointment)
+        .filter(Appointment.patient_id == uuid.UUID(patient_id))
+        .filter(
+            Appointment.status.in_(
+                [AppointmentStatus.pending, AppointmentStatus.confirmed, AppointmentStatus.rescheduled]
+            )
+        )
+        .all()
+    )
+    result = []
+    for appointment in rows:
+        details = appointment_display_details(db, str(appointment.id))
+        if details:
+            result.append({"appointment_id": str(appointment.id), **details})
+    return sorted(result, key=lambda r: r["formatted_time"])
+
+
 @audited("check_slot_availability", "AppointmentSlot")
 def check_slot_availability(db: Session, department_id: str, preferred_window: dict) -> list[dict]:
     now = datetime.now(timezone.utc)

@@ -8,6 +8,11 @@ def test_workflow_status_has_needs_clarification_value():
     assert WorkflowStatus.needs_clarification.value == "needs_clarification"
 
 
+def test_workflow_status_has_needs_appointment_selection_value():
+    assert WorkflowStatus.needs_appointment_selection.value == "needs_appointment_selection"
+
+
+
 
 def test_create_department_and_doctor(db_session):
     dept = Department(name=f"Cardiology-{uuid.uuid4().hex[:8]}", description="Heart care", active=True)

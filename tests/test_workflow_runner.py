@@ -1,7 +1,18 @@
 import uuid
 
-from app.models import Appointment, AppointmentSlot, AuditEvent, Escalation, SlotStatus, WorkflowRun, WorkflowStatus
+from app.models import (
+    Appointment,
+    AppointmentSlot,
+    AppointmentStatus,
+    AuditEvent,
+    Escalation,
+    SlotStatus,
+    WorkflowRun,
+    WorkflowStatus,
+)
+
 from app.workflow_runner import (
+    continue_as_appointment_action,
     continue_as_booking,
     continue_as_booking_with_department,
     continue_as_staff_escalation,
@@ -12,6 +23,7 @@ from tests.fakes import (
     FakeToolCallingModel,
     ai_message_text,
     ai_message_with_tool_call,
+    make_appointment,
     make_appointment_slot,
     make_department,
     make_doctor,
@@ -19,6 +31,7 @@ from tests.fakes import (
     make_user,
     make_workflow_run,
 )
+
 
 
 def test_emergency_request_ends_needs_review_with_escalation_row(monkeypatch, db_session):
@@ -475,3 +488,144 @@ def test_continue_with_selected_slot_stays_at_selection_on_conflict(db_session):
 
     assert result.status == WorkflowStatus.needs_slot_selection
     assert result.state["appointment_id"] is None
+
+
+def test_run_workflow_cancel_intent_lands_on_needs_appointment_selection(monkeypatch, db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    make_appointment(db_session, patient=profile)
+
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("cancel_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    workflow_run = run_workflow(
+        db_session,
+        patient_id=str(profile.id),
+        user_id=str(user.id),
+        request_text="I need to cancel my appointment",
+    )
+
+    assert workflow_run.status == WorkflowStatus.needs_appointment_selection
+    assert workflow_run.state["pending_appointment_action"] == "cancel"
+
+
+def test_run_workflow_cancel_intent_with_no_appointments_lands_on_completed(monkeypatch, db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("cancel_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    workflow_run = run_workflow(
+        db_session,
+        patient_id=str(profile.id),
+        user_id=str(user.id),
+        request_text="I need to cancel my appointment",
+    )
+
+    assert workflow_run.status == WorkflowStatus.completed
+    assert workflow_run.state["pending_appointment_action"] == "cancel"
+    assert workflow_run.state["appointment_id"] is None
+
+
+def test_continue_as_appointment_action_cancel_cancels_and_frees_slot(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run = make_workflow_run(db_session, profile=profile)
+    workflow_run.status = WorkflowStatus.needs_appointment_selection
+    workflow_run.state = {
+        "workflow_run_id": str(workflow_run.id),
+        "patient_id": str(profile.id),
+        "user_id": str(user.id),
+        "pending_appointment_action": "cancel",
+        "status": "needs_appointment_selection",
+    }
+    db_session.commit()
+
+    result = continue_as_appointment_action(db_session, workflow_run, str(appointment.id))
+
+    assert result.status == WorkflowStatus.completed
+    fetched_appointment = db_session.get(Appointment, appointment.id)
+    assert fetched_appointment.status == AppointmentStatus.cancelled
+    fetched_slot = db_session.get(AppointmentSlot, slot.id)
+    assert fetched_slot.status == SlotStatus.open
+
+
+def test_continue_as_appointment_action_reschedule_lands_on_needs_slot_selection(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot1 = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot1)
+
+    workflow_run = make_workflow_run(db_session, profile=profile)
+    workflow_run.status = WorkflowStatus.needs_appointment_selection
+    workflow_run.state = {
+        "workflow_run_id": str(workflow_run.id),
+        "patient_id": str(profile.id),
+        "user_id": str(user.id),
+        "pending_appointment_action": "reschedule",
+        "status": "needs_appointment_selection",
+    }
+    db_session.commit()
+
+    result = continue_as_appointment_action(db_session, workflow_run, str(appointment.id))
+
+    assert result.status == WorkflowStatus.needs_slot_selection
+    assert result.state["department_id"] == str(department.id)
+    assert result.state["rescheduling_appointment_id"] == str(appointment.id)
+
+
+def test_continue_with_selected_slot_reschedules_existing_appointment(db_session):
+    user = make_user(db_session)
+    profile = make_patient_profile(db_session, user=user)
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot1 = make_appointment_slot(db_session, doctor=doctor)
+    slot2 = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot1)
+
+    workflow_run = make_workflow_run(db_session, profile=profile)
+    workflow_run.status = WorkflowStatus.needs_slot_selection
+    workflow_run.state = {
+        "workflow_run_id": str(workflow_run.id),
+        "patient_id": str(profile.id),
+        "user_id": str(user.id),
+        "department_id": str(department.id),
+        "pending_appointment_action": "reschedule",
+        "rescheduling_appointment_id": str(appointment.id),
+        "status": "needs_slot_selection",
+    }
+    db_session.commit()
+
+    result = continue_with_selected_slot(db_session, workflow_run, str(slot2.id))
+
+    assert result.status == WorkflowStatus.completed
+    fetched_appointment = db_session.get(Appointment, appointment.id)
+    assert fetched_appointment.status == AppointmentStatus.rescheduled
+    assert fetched_appointment.slot_id == slot2.id
+    freed_slot = db_session.get(AppointmentSlot, slot1.id)
+    assert freed_slot.status == SlotStatus.open
+

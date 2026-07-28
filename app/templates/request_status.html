@@ -18,6 +18,16 @@
     </form>
 </div>
 {% endif %}
+{% if workflow_run.status.value == "needs_appointment_selection" %}
+<div style="margin-top: 16px; margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px;">
+    {% for appt in appointments %}
+    <form method="post" action="/requests/{{ workflow_run.id }}/select-appointment" style="display:inline">
+        <input type="hidden" name="appointment_id" value="{{ appt.appointment_id }}">
+        <button type="submit" style="width: 100%; text-align: left; padding: 12px 16px; background-color: white; border: 1px solid #0066cc; color: #0066cc; border-radius: 4px; font-weight: 500; cursor: pointer;">{{ appt.doctor_name }} — {{ appt.department_name }} ({{ appt.formatted_time }})</button>
+    </form>
+    {% endfor %}
+</div>
+{% endif %}
 {% if workflow_run.status.value == "needs_appointment_reason" %}
 <div style="margin-top: 16px; margin-bottom: 24px;">
     <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">

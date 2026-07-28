@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
-from app.models import Appointment, AppointmentSlot, AuditEvent, Doctor, SlotStatus
-from app.tools.appointment_tools import _slots_summary, book_or_modify_appointment, check_slot_availability
-from tests.fakes import make_appointment_slot, make_department, make_doctor, make_patient_profile
+from app.models import Appointment, AppointmentSlot, AppointmentStatus, AuditEvent, Doctor, SlotStatus
+from app.tools.appointment_tools import _slots_summary, book_or_modify_appointment, check_slot_availability, list_patient_appointments
+from tests.fakes import make_appointment, make_appointment_slot, make_department, make_doctor, make_patient_profile
+
 
 
 def test_slots_summary_includes_real_slot_id_the_model_can_copy():
@@ -191,3 +192,30 @@ def test_book_or_modify_appointment_writes_audit_event(db_session):
 
     audit_actions = {e.action for e in db_session.query(AuditEvent).all()}
     assert "book_or_modify_appointment" in audit_actions
+
+
+def test_list_patient_appointments_returns_active_appointments_only(db_session):
+    profile = make_patient_profile(db_session)
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+
+    start = datetime.now(timezone.utc) + timedelta(days=1)
+    slot1 = make_appointment_slot(db_session, doctor=doctor, start_time=start)
+    slot2 = make_appointment_slot(db_session, doctor=doctor, start_time=start + timedelta(hours=1))
+    slot3 = make_appointment_slot(db_session, doctor=doctor, start_time=start + timedelta(hours=2))
+
+    appt_confirmed = make_appointment(
+        db_session, patient=profile, doctor=doctor, slot=slot1, status=AppointmentStatus.confirmed
+    )
+    appt_rescheduled = make_appointment(
+        db_session, patient=profile, doctor=doctor, slot=slot2, status=AppointmentStatus.rescheduled
+    )
+    make_appointment(db_session, patient=profile, doctor=doctor, slot=slot3, status=AppointmentStatus.cancelled)
+
+    appts = list_patient_appointments(db_session, str(profile.id))
+
+    assert len(appts) == 2
+    appt_ids = {a["appointment_id"] for a in appts}
+    assert str(appt_confirmed.id) in appt_ids
+    assert str(appt_rescheduled.id) in appt_ids
+

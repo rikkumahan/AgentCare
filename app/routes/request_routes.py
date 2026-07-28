@@ -11,8 +11,13 @@ from app.config import settings
 from app.db import get_db
 from app.models import Department, PatientProfile, User, UserRole, WorkflowRun, WorkflowStatus
 from app.rbac import require_role
-from app.tools.appointment_tools import appointment_display_details, check_slot_availability
+from app.tools.appointment_tools import (
+    appointment_display_details,
+    check_slot_availability,
+    list_patient_appointments,
+)
 from app.workflow_runner import (
+    continue_as_appointment_action,
     continue_as_booking,
     continue_as_booking_with_department,
     continue_as_staff_escalation,
@@ -53,14 +58,34 @@ def _render_patient_message(db: Session, user: User, workflow_run: WorkflowRun) 
 
     if workflow_status == WorkflowStatus.needs_clarification:
         message = f"Hi {user.name}! I want to make sure I help you with the right thing."
+    elif workflow_status == WorkflowStatus.needs_appointment_selection:
+        message = "Which appointment is this about?"
     elif workflow_status == WorkflowStatus.needs_appointment_reason:
         message = "What's this appointment for? Pick a department below, or describe it in your own words."
     elif workflow_status == WorkflowStatus.needs_slot_selection:
         message = "Here are the real open times - pick whichever works for you."
     elif workflow_status == WorkflowStatus.completed:
+        pending_action = state.get("pending_appointment_action")
         appointment_id = state.get("appointment_id")
         details = appointment_display_details(db, appointment_id) if appointment_id else None
-        if details:
+
+        if pending_action == "cancel":
+            if details:
+                message = (
+                    f"Your appointment with {details['doctor_name']} "
+                    f"in {details['department_name']} on {details['formatted_time']} has been cancelled."
+                )
+            else:
+                message = "You don't have any upcoming appointments to cancel."
+        elif pending_action == "reschedule":
+            if details:
+                message = (
+                    f"Done! Your appointment is now with {details['doctor_name']} "
+                    f"in {details['department_name']} on {details['formatted_time']}."
+                )
+            else:
+                message = "You don't have any upcoming appointments to reschedule."
+        elif details:
             message = (
                 f"Great news, {user.name}! You're booked with {details['doctor_name']} "
                 f"in {details['department_name']} on {details['formatted_time']}."
@@ -147,9 +172,12 @@ def request_status(
         raise HTTPException(status_code=403, detail="Not your request")
 
     patient_message = _render_patient_message(db, user, workflow_run)
+    appointments = []
     departments = []
     slots = []
-    if workflow_run.status == WorkflowStatus.needs_appointment_reason:
+    if workflow_run.status == WorkflowStatus.needs_appointment_selection:
+        appointments = list_patient_appointments(db, str(profile.id))
+    elif workflow_run.status == WorkflowStatus.needs_appointment_reason:
         departments = db.query(Department).filter(Department.active.is_(True)).order_by(Department.name).all()
     elif workflow_run.status == WorkflowStatus.needs_slot_selection:
         department_id = workflow_run.state.get("department_id")
@@ -164,6 +192,7 @@ def request_status(
             "user": user,
             "workflow_run": workflow_run,
             "patient_message": patient_message,
+            "appointments": appointments,
             "departments": departments,
             "slots": slots,
         },
@@ -211,6 +240,29 @@ def clarify_request(
         )
     else:
         raise HTTPException(status_code=400, detail="Unknown choice")
+
+    return RedirectResponse(f"/requests/{workflow_run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/requests/{workflow_run_id}/select-appointment")
+def select_appointment(
+    workflow_run_id: str,
+    appointment_id: str = Form(...),
+    user: User = Depends(require_role(UserRole.patient.value)),
+    db: Session = Depends(get_db),
+):
+    workflow_run = db.get(WorkflowRun, workflow_run_id)
+    if workflow_run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    profile = _get_or_create_profile(db, user)
+    if workflow_run.patient_id != profile.id:
+        raise HTTPException(status_code=403, detail="Not your request")
+
+    if workflow_run.status != WorkflowStatus.needs_appointment_selection:
+        return RedirectResponse(f"/requests/{workflow_run_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    continue_as_appointment_action(db, workflow_run, appointment_id)
 
     return RedirectResponse(f"/requests/{workflow_run_id}", status_code=status.HTTP_303_SEE_OTHER)
 

@@ -3,10 +3,13 @@ import uuid
 from app.agents.routing import routing_agent_node
 from app.db import SessionLocal
 from app.graph import build_graph
-from app.models import WorkflowRun, WorkflowStatus
-from app.tools.appointment_tools import book_or_modify_appointment, check_slot_availability
+from app.models import Appointment, Doctor, WorkflowRun, WorkflowStatus
+from app.tools.appointment_tools import (
+    book_or_modify_appointment,
+    check_slot_availability,
+    list_patient_appointments,
+)
 from app.tools.escalation_tools import create_escalation
-
 
 _compiled_graph = build_graph()
 
@@ -43,6 +46,9 @@ def run_workflow(
         "status": "running",
         "needs_clarification": False,
         "needs_appointment_reason": False,
+        "needs_appointment_selection": False,
+        "pending_appointment_action": None,
+        "rescheduling_appointment_id": None,
     }
 
     # SessionLocal (the scoped_session registry), not the resolved db
@@ -78,6 +84,8 @@ def run_workflow(
         workflow_run.status = WorkflowStatus.needs_review
     elif full_state.get("needs_clarification"):
         workflow_run.status = WorkflowStatus.needs_clarification
+    elif full_state.get("needs_appointment_selection"):
+        return _land_on_appointment_selection_or_none(db, workflow_run, full_state)
     elif full_state.get("needs_appointment_reason"):
         # Routing intent was confidently "book_appointment" but the patient
         # never actually said what kind of care they need (e.g. "I'm here
@@ -101,7 +109,22 @@ def run_workflow(
     return workflow_run
 
 
-def _land_on_slots_or_no_slots(db, workflow_run: WorkflowRun, full_state: dict, department_id: str) -> WorkflowRun:
+def _land_on_appointment_selection_or_none(db, workflow_run: WorkflowRun, full_state: dict) -> WorkflowRun:
+    appointments = list_patient_appointments(db, full_state["patient_id"])
+    if appointments:
+        workflow_run.status = WorkflowStatus.needs_appointment_selection
+    else:
+        workflow_run.status = WorkflowStatus.completed
+    workflow_run.current_step = "needs_appointment_selection"
+    full_state["status"] = workflow_run.status.value
+    workflow_run.state = dict(full_state)
+    db.commit()
+    return workflow_run
+
+
+def _land_on_slots_or_no_slots(
+    db, workflow_run: WorkflowRun, full_state: dict, department_id: str, rescheduling_appointment_id: str | None = None
+) -> WorkflowRun:
     """Shared by both continuation functions below once department_id is
     known (however it was determined - button click or Routing's LLM
     match). Queries real open slots directly via check_slot_availability
@@ -113,6 +136,8 @@ def _land_on_slots_or_no_slots(db, workflow_run: WorkflowRun, full_state: dict, 
     same "couldn't find any open slots" wording branch as before, still
     accurate since that case really means what it says now."""
     full_state["department_id"] = department_id
+    if rescheduling_appointment_id:
+        full_state["rescheduling_appointment_id"] = rescheduling_appointment_id
     slots = check_slot_availability(db, department_id, {})
     if slots:
         workflow_run.status = WorkflowStatus.needs_slot_selection
@@ -206,7 +231,9 @@ def continue_with_selected_slot(db, workflow_run: WorkflowRun, slot_id: str) -> 
     and this stays at needs_slot_selection so the patient can pick a
     different one instead of the run silently failing."""
     patient_id = workflow_run.state["patient_id"]
-    result = book_or_modify_appointment(db, patient_id, slot_id, "book", None)
+    rescheduling_id = workflow_run.state.get("rescheduling_appointment_id")
+    action = "reschedule" if rescheduling_id else "book"
+    result = book_or_modify_appointment(db, patient_id, slot_id, action, rescheduling_id)
 
     full_state = dict(workflow_run.state)
     if result["status"] == "error":
@@ -217,9 +244,49 @@ def continue_with_selected_slot(db, workflow_run: WorkflowRun, slot_id: str) -> 
         workflow_run.status = WorkflowStatus.completed
         workflow_run.current_step = "appointment_agent"
     full_state["status"] = workflow_run.status.value
+
     workflow_run.state = full_state
     db.commit()
     return workflow_run
+
+
+def continue_as_appointment_action(db, workflow_run: WorkflowRun, appointment_id: str) -> WorkflowRun:
+    """needs_appointment_selection -> patient picked which real appointment
+    they mean. Branches on the action recorded when the graph set
+    needs_appointment_selection:
+
+    - cancel: calls book_or_modify_appointment(action="cancel") directly -
+      deterministic, no LLM, no ToolNode, `db` safe to use directly (same
+      class as continue_with_selected_slot). Lands at completed immediately.
+    - reschedule: looks up the appointment's current department (via its
+      doctor), then reuses _land_on_slots_or_no_slots with
+      rescheduling_appointment_id set, landing at needs_slot_selection - the
+      exact same screen and continue_with_selected_slot path booking uses,
+      just pre-scoped to this appointment's department and remembering which
+      appointment to update instead of creating a new one."""
+    full_state = dict(workflow_run.state)
+    action = full_state.get("pending_appointment_action")
+
+    if action == "cancel":
+        result = book_or_modify_appointment(db, full_state["patient_id"], None, "cancel", appointment_id)
+        full_state["appointment_id"] = result.get("id")
+        workflow_run.status = WorkflowStatus.completed
+        workflow_run.current_step = "needs_appointment_selection"
+        full_state["status"] = workflow_run.status.value
+        workflow_run.state = full_state
+        db.commit()
+        return workflow_run
+
+    # reschedule: find the department this appointment is currently in
+    appointment = db.query(Appointment).filter(Appointment.id == uuid.UUID(appointment_id)).first()
+    doctor = db.query(Doctor).filter(Doctor.id == appointment.doctor_id).first()
+    return _land_on_slots_or_no_slots(
+        db,
+        workflow_run,
+        full_state,
+        str(doctor.department_id),
+        rescheduling_appointment_id=appointment_id,
+    )
 
 
 def continue_as_staff_escalation(db, workflow_run: WorkflowRun, reason: str) -> WorkflowRun:
@@ -235,4 +302,3 @@ def continue_as_staff_escalation(db, workflow_run: WorkflowRun, reason: str) -> 
     workflow_run.state = full_state
     db.commit()
     return workflow_run
-

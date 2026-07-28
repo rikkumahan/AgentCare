@@ -5,7 +5,19 @@ from fastapi.testclient import TestClient
 
 from app.auth import hash_password
 from app.main import app
-from app.models import Appointment, PatientDocument, PatientProfile, User, UserRole, WorkflowRun, WorkflowStatus
+from app.models import (
+    Appointment,
+    AppointmentSlot,
+    AppointmentStatus,
+    Department,
+    PatientDocument,
+    PatientProfile,
+    User,
+    UserRole,
+    WorkflowRun,
+    WorkflowStatus,
+)
+
 from app.routes.request_routes import _render_patient_message
 from tests.fakes import (
     FakeToolCallingModel,
@@ -836,3 +848,165 @@ def test_clarify_invalid_choice_returns_400(monkeypatch, db_session):
 
     bad = client.post(f"/requests/{workflow_run_id}/clarify", data={"choice": "nonsense"}, follow_redirects=False)
     assert bad.status_code == 400
+
+
+def test_render_patient_message_needs_appointment_selection(db_session):
+    user = make_user(db_session)
+    workflow_run = make_workflow_run(db_session)
+    workflow_run.status = WorkflowStatus.needs_appointment_selection
+    workflow_run.state = {"document_ids": []}
+    db_session.commit()
+
+    message = _render_patient_message(db_session, user, workflow_run)
+    assert message == "Which appointment is this about?"
+
+
+def test_render_patient_message_completed_cancel(db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, doctor=doctor, slot=slot)
+    user = make_user(db_session)
+    workflow_run = make_workflow_run(db_session)
+    workflow_run.status = WorkflowStatus.completed
+    workflow_run.state = {
+        "pending_appointment_action": "cancel",
+        "appointment_id": str(appointment.id),
+        "document_ids": [],
+    }
+    db_session.commit()
+
+    message = _render_patient_message(db_session, user, workflow_run)
+    assert f"Your appointment with {doctor.name} in {department.name}" in message
+    assert "has been cancelled" in message
+
+
+def test_render_patient_message_completed_reschedule(db_session):
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, doctor=doctor, slot=slot)
+    user = make_user(db_session)
+    workflow_run = make_workflow_run(db_session)
+    workflow_run.status = WorkflowStatus.completed
+    workflow_run.state = {
+        "pending_appointment_action": "reschedule",
+        "appointment_id": str(appointment.id),
+        "document_ids": [],
+    }
+    db_session.commit()
+
+    message = _render_patient_message(db_session, user, workflow_run)
+    assert f"Done! Your appointment is now with {doctor.name} in {department.name}" in message
+
+
+def test_select_appointment_cancel_cancels_and_redirects(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("cancel_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    cookie = _register_patient("Cancel Route Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post("/requests/new", data={"request_text": "I need to cancel"}, follow_redirects=False)
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+
+    profile = db_session.get(PatientProfile, workflow_run.patient_id)
+    doctor = make_doctor(db_session)
+    slot = make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot)
+
+    workflow_run.status = WorkflowStatus.needs_appointment_selection
+    workflow_run.state = {**workflow_run.state, "pending_appointment_action": "cancel", "status": "needs_appointment_selection"}
+    db_session.commit()
+
+    select_resp = client.post(
+        f"/requests/{workflow_run_id}/select-appointment",
+        data={"appointment_id": str(appointment.id)},
+        follow_redirects=False,
+    )
+    assert select_resp.status_code == 303
+    assert select_resp.headers["location"] == f"/requests/{workflow_run_id}"
+
+    db_session.expire_all()
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    assert workflow_run.status.value == "completed"
+    fetched_appointment = db_session.get(Appointment, appointment.id)
+    assert fetched_appointment.status == AppointmentStatus.cancelled
+
+
+def test_select_appointment_reschedule_lands_on_slot_selection(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("reschedule_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    cookie = _register_patient("Resched Route Patient")
+    client.cookies.set("agentcare_session", cookie)
+
+    resp = client.post("/requests/new", data={"request_text": "I need to reschedule"}, follow_redirects=False)
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+
+    profile = db_session.get(PatientProfile, workflow_run.patient_id)
+    department = make_department(db_session)
+    doctor = make_doctor(db_session, department=department)
+    slot1 = make_appointment_slot(db_session, doctor=doctor)
+    make_appointment_slot(db_session, doctor=doctor)
+    appointment = make_appointment(db_session, patient=profile, doctor=doctor, slot=slot1)
+
+    workflow_run.status = WorkflowStatus.needs_appointment_selection
+    workflow_run.state = {**workflow_run.state, "pending_appointment_action": "reschedule", "status": "needs_appointment_selection"}
+    db_session.commit()
+
+    select_resp = client.post(
+        f"/requests/{workflow_run_id}/select-appointment",
+        data={"appointment_id": str(appointment.id)},
+        follow_redirects=False,
+    )
+    assert select_resp.status_code == 303
+
+    db_session.expire_all()
+    workflow_run = db_session.get(WorkflowRun, workflow_run_id)
+    assert workflow_run.status.value == "needs_slot_selection"
+    assert workflow_run.state["rescheduling_appointment_id"] == str(appointment.id)
+
+
+def test_select_appointment_wrong_owner_returns_403(monkeypatch, db_session):
+    safety_model = FakeToolCallingModel([ai_message_text("SAFE")])
+    monkeypatch.setattr("app.agents.safety.get_llm", lambda: safety_model)
+    coordinator_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("get_or_create_patient_tool", {"profile_fields": {}}),
+            ai_message_text("cancel_appointment"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.coordinator.get_llm", lambda: coordinator_model)
+
+    cookie_a = _register_patient("Cancel Owner A")
+    client.cookies.set("agentcare_session", cookie_a)
+    resp = client.post("/requests/new", data={"request_text": "I need to cancel"}, follow_redirects=False)
+    workflow_run_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    cookie_b = _register_patient("Cancel Owner B")
+    client.cookies.set("agentcare_session", cookie_b)
+
+    select_resp = client.post(
+        f"/requests/{workflow_run_id}/select-appointment",
+        data={"appointment_id": str(uuid.uuid4())},
+        follow_redirects=False,
+    )
+    assert select_resp.status_code == 403
+
