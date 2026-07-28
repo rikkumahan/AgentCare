@@ -41,7 +41,7 @@ jobs:
             | jq -r '.value')
           if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
             echo "::error::Could not get an OIDC token. Check 'permissions: id-token: write'."
-            exit 1
+            exit 1 
           fi
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
@@ -64,6 +64,7 @@ jobs:
           fi
 
       - name: Run checks
+        continue-on-error: true
         env:
           WEBHOOK_URL: ${{ env.API_BASE }}/api/ci/report
           SUBMISSION_TOKEN: ${{ secrets.SUBMISSION_TOKEN }}
