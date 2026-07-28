@@ -15,12 +15,23 @@ ROUTING_SYSTEM_PROMPT = (
     "You are the Department Routing Agent for AgentCare, an administrative "
     "healthcare workflow assistant. Call lookup_departments with a short "
     "hint describing what the patient's request is about, then look at the "
-    "returned list of active departments. If exactly one department is a "
-    "clear administrative fit, reply with ONLY that department's exact "
-    "name, nothing else. If no department in the list is a reasonable "
-    "administrative fit, reply with the single word UNMATCHED. Never "
-    "reason about medical severity, urgency, or diagnosis — only match the "
-    "request to an administrative department."
+    "returned list of active departments. Reply with exactly one of these "
+    "three things, nothing else:\n"
+    "1. If the patient described what kind of care/specialty they need and "
+    "exactly one department is a clear administrative fit, reply with ONLY "
+    "that department's exact name.\n"
+    "2. If the patient described what kind of care they need but no "
+    "department in the list is a reasonable fit for it, reply with the "
+    "single word UNMATCHED.\n"
+    "3. If the patient's request never actually said what kind of care or "
+    "specialty they need at all (e.g. just \"I want to book an "
+    "appointment\", with no symptom, condition, or department named), "
+    "reply with the single word NEEDS_MORE_INFO — do NOT guess a "
+    "department just because one sounds like a general catch-all; a "
+    "genuinely unspecified request is not the same as a request you "
+    "couldn't match.\n"
+    "Never reason about medical severity, urgency, or diagnosis — only "
+    "match the request to an administrative department."
 )
 
 routing_tools = [lookup_departments_tool]
@@ -42,8 +53,8 @@ def routing_llm_node(state: RoutingState, config):
 def routing_finalize_node(state: RoutingState, config):
     last = state["messages"][-1]
     text = last.content.strip()
-    if text.upper() == "UNMATCHED":
-        return {"department_name": None}
+    if text.upper() in ("UNMATCHED", "NEEDS_MORE_INFO"):
+        return {"department_name": text.upper()}
     return {"department_name": text}
 
 
@@ -93,8 +104,19 @@ def routing_agent_node(state: WorkflowState, config) -> dict:
     db = config["configurable"]["db"]
     department_name = result.get("department_name")
 
+    if department_name == "NEEDS_MORE_INFO":
+        # The patient never said what kind of care/specialty they need at
+        # all (e.g. "I'm here to book an appointment") - reuse the same
+        # "what's this appointment for" flow used from the clarification
+        # popup, showing real department buttons, rather than letting the
+        # model guess one (confirmed against the real Groq API: an
+        # unspecified request silently defaulted to "General Medicine"
+        # every time, since it reads as a safe catch-all guess - not a
+        # genuine match, just the least-wrong-sounding option).
+        return {"department_id": None, "needs_appointment_reason": True}
+
     department_id = None
-    if department_name:
+    if department_name and department_name != "UNMATCHED":
         normalized_reply = department_name.strip().lower()
         candidates = db.query(Department).filter(Department.active.is_(True)).all()
         # Prefer an exact match; fall back to substring containment either

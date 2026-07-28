@@ -1,7 +1,50 @@
 {% extends "base.html" %}
 {% block title %}Dashboard - AgentCare{% endblock %}
 {% block content %}
-<h1>Welcome, {{ user.name }}</h1>
-<p>Role: {{ user.role.value }}</p>
-<form method="post" action="/logout"><button type="submit">Log out</button></form>
+<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <h1 style="margin: 0;">Welcome, {{ user.name }}</h1>
+    <a href="/requests/new" style="padding: 10px 18px; background-color: #0066cc; color: white; text-decoration: none; border-radius: 6px; font-weight: 500;">+ Submit New Request</a>
+</div>
+
+<h2>My Requests</h2>
+
+{% if workflow_runs %}
+<table border="1" cellpadding="10" cellspacing="0" style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+    <thead>
+        <tr style="background-color: #f2f2f2;">
+            <th style="text-align: left;">Date</th>
+            <th style="text-align: left;">Request Description</th>
+            <th style="text-align: left;">Appointment</th>
+            <th style="text-align: center;">Documents</th>
+            <th style="text-align: left;">Status</th>
+            <th style="text-align: center;">Action</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for run in workflow_runs %}
+        {% set details = appointment_details.get(run.id | string) %}
+        <tr>
+            <td>{{ run.created_at.strftime('%Y-%m-%d %H:%M') if run.created_at else 'Recent' }}</td>
+            <td>{{ run.state.get('request_text', 'No text') }}</td>
+            <td>
+                {% if details %}
+                <strong>{{ details.doctor_name }}</strong> — {{ details.department_name }}<br>
+                <span style="color: #555; font-size: 13px;">{{ details.formatted_time }}</span>
+                {% else %}
+                <span style="color: #999;">—</span>
+                {% endif %}
+            </td>
+            <td style="text-align: center;">{{ run.state.get('document_ids', []) | length }} file(s)</td>
+            <td><span style="display: inline-block; padding: 3px 8px; border-radius: 4px; background-color: #e9ecef; font-size: 14px;">{{ run.status.value }}</span></td>
+            <td style="text-align: center;"><a href="/requests/{{ run.id }}" style="color: #0066cc; font-weight: 500;">View Details</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div style="padding: 20px; background-color: #f8f9fa; border-radius: 6px; text-align: center;">
+    <p style="margin-bottom: 12px; font-size: 16px;">You haven't submitted any healthcare requests yet.</p>
+    <a href="/requests/new" style="padding: 8px 16px; background-color: #0066cc; color: white; text-decoration: none; border-radius: 4px;">Click here to submit your first request</a>
+</div>
+{% endif %}
 {% endblock %}

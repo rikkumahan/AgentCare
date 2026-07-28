@@ -1,8 +1,12 @@
 import uuid
 
+from app.agents.routing import routing_agent_node
 from app.db import SessionLocal
 from app.graph import build_graph
 from app.models import WorkflowRun, WorkflowStatus
+from app.tools.appointment_tools import book_or_modify_appointment, check_slot_availability
+from app.tools.escalation_tools import create_escalation
+
 
 _compiled_graph = build_graph()
 
@@ -37,6 +41,8 @@ def run_workflow(
         "reminder_ids": [],
         "escalation": None,
         "status": "running",
+        "needs_clarification": False,
+        "needs_appointment_reason": False,
     }
 
     # SessionLocal (the scoped_session registry), not the resolved db
@@ -70,11 +76,163 @@ def run_workflow(
 
     if full_state.get("escalation"):
         workflow_run.status = WorkflowStatus.needs_review
+    elif full_state.get("needs_clarification"):
+        workflow_run.status = WorkflowStatus.needs_clarification
+    elif full_state.get("needs_appointment_reason"):
+        # Routing intent was confidently "book_appointment" but the patient
+        # never actually said what kind of care they need (e.g. "I'm here
+        # to book an appointment") - ask, with real department buttons,
+        # instead of Routing's LLM silently guessing one.
+        workflow_run.status = WorkflowStatus.needs_appointment_reason
+    elif full_state.get("department_id"):
+        # routing_agent resolved a real department and the graph ends
+        # right there now (app/graph.py) - no agent auto-picks or
+        # auto-books a slot on the patient's behalf anymore. Land on the
+        # real slot list (or "no slots" if genuinely none exist), same
+        # deterministic helper the clarification-flow continuations use.
+        return _land_on_slots_or_no_slots(db, workflow_run, full_state, full_state["department_id"])
     else:
-        workflow_run.status = WorkflowStatus.running
-        workflow_run.current_step = "document_agent"
+        workflow_run.status = WorkflowStatus.completed
 
+    full_state["status"] = workflow_run.status.value
+
+    workflow_run.state = dict(full_state)
+    db.commit()
+    return workflow_run
+
+
+def _land_on_slots_or_no_slots(db, workflow_run: WorkflowRun, full_state: dict, department_id: str) -> WorkflowRun:
+    """Shared by both continuation functions below once department_id is
+    known (however it was determined - button click or Routing's LLM
+    match). Queries real open slots directly via check_slot_availability
+    (the plain function, not the LLM tool - no model involvement at all,
+    nothing to guess). If any exist, lands at needs_slot_selection so the
+    patient can pick one for real, with real doctor names and times, rather
+    than the Appointment agent silently auto-picking one on their behalf.
+    If genuinely none exist, lands at completed with no appointment_id -
+    same "couldn't find any open slots" wording branch as before, still
+    accurate since that case really means what it says now."""
+    full_state["department_id"] = department_id
+    slots = check_slot_availability(db, department_id, {})
+    if slots:
+        workflow_run.status = WorkflowStatus.needs_slot_selection
+    else:
+        workflow_run.status = WorkflowStatus.completed
+    workflow_run.current_step = "needs_slot_selection"
     full_state["status"] = workflow_run.status.value
     workflow_run.state = dict(full_state)
     db.commit()
     return workflow_run
+
+
+def continue_as_booking(db, workflow_run: WorkflowRun, override_request_text: str | None = None) -> WorkflowRun:
+    """needs_appointment_reason -> patient answered "what's this for" with
+    free text (no department listed matched, or they typed their own
+    description). Runs routing_agent_node (the only LLM step left in this
+    path - department matching genuinely needs judgment when given free
+    text) to resolve a department, then lands on the real slot list via
+    _land_on_slots_or_no_slots - no Appointment-agent LLM call at all
+    anymore; slot selection is the patient's choice, not a model guess.
+    Lands at needs_review if Routing escalates (couldn't match any
+    department), matching the existing safety-conscious behavior.
+
+    override_request_text replaces state["request_text"] before routing
+    runs, so Routing's LLM sees the patient's actual answer to "what's this
+    appointment for" instead of re-matching whatever ambiguous text
+    originally triggered needs_clarification (that original text may have
+    had nothing routable in it at all - e.g. "what are your visiting
+    hours" - re-feeding it to Routing would just fail the same way again).
+
+    config MUST be built from the SessionLocal registry, never the
+    caller's own `db` parameter directly - see docs/memory/gotchas.md,
+    "The shared-Session/ToolNode bug (above) almost got reintroduced by a
+    design spec". routing_agent_node dispatches tool calls through
+    LangGraph's ToolNode, which runs them in a worker thread; a bare
+    Session object is not thread-safe.
+    """
+    config = {"configurable": {"db": SessionLocal}}
+    full_state = dict(workflow_run.state)
+    if override_request_text:
+        full_state["request_text"] = override_request_text
+
+    routing_update = routing_agent_node(full_state, config)
+    full_state.update(routing_update or {})
+    workflow_run.current_step = "routing_agent"
+    workflow_run.state = dict(full_state)
+    db.commit()
+
+    if full_state.get("escalation"):
+        workflow_run.status = WorkflowStatus.needs_review
+        full_state["status"] = workflow_run.status.value
+        workflow_run.state = dict(full_state)
+        db.commit()
+        return workflow_run
+
+    if full_state.get("needs_appointment_reason"):
+        # The patient's free-text answer was still too vague to route on
+        # (rare - they already got one chance to describe it) - ask again
+        # rather than escalate or guess; the same department-buttons +
+        # free-text form is still right there.
+        workflow_run.status = WorkflowStatus.needs_appointment_reason
+        full_state["status"] = workflow_run.status.value
+        workflow_run.state = dict(full_state)
+        db.commit()
+        return workflow_run
+
+    return _land_on_slots_or_no_slots(db, workflow_run, full_state, full_state["department_id"])
+
+
+def continue_as_booking_with_department(db, workflow_run: WorkflowRun, department_id: str) -> WorkflowRun:
+    """needs_appointment_reason -> patient picked a real department directly
+    from the buttons shown (not free text). Skips routing_agent entirely -
+    there is nothing to guess, the patient already told us the department -
+    and goes straight to _land_on_slots_or_no_slots. Fully deterministic,
+    no LLM call anywhere in this path."""
+    full_state = dict(workflow_run.state)
+    return _land_on_slots_or_no_slots(db, workflow_run, full_state, department_id)
+
+
+def continue_with_selected_slot(db, workflow_run: WorkflowRun, slot_id: str) -> WorkflowRun:
+    """needs_slot_selection -> patient picked one specific real slot from
+    the list shown. Books that exact slot directly via
+    book_or_modify_appointment (the plain function, not the LLM tool) - no
+    LLM call, no ToolNode involved at all, so `db` is safe to use directly
+    here, unlike continue_as_booking/continue_as_booking_with_department
+    above. If the slot was taken by someone else between listing and this
+    click (a real, if narrow, race - the same class the original spec's
+    error-handling section already anticipated for the deferred
+    confirm-before-booking design), book_or_modify_appointment's existing
+    conflict/no-longer-open checks catch it, no appointment gets created,
+    and this stays at needs_slot_selection so the patient can pick a
+    different one instead of the run silently failing."""
+    patient_id = workflow_run.state["patient_id"]
+    result = book_or_modify_appointment(db, patient_id, slot_id, "book", None)
+
+    full_state = dict(workflow_run.state)
+    if result["status"] == "error":
+        workflow_run.status = WorkflowStatus.needs_slot_selection
+        workflow_run.current_step = "needs_slot_selection"
+    else:
+        full_state["appointment_id"] = result["id"]
+        workflow_run.status = WorkflowStatus.completed
+        workflow_run.current_step = "appointment_agent"
+    full_state["status"] = workflow_run.status.value
+    workflow_run.state = full_state
+    db.commit()
+    return workflow_run
+
+
+def continue_as_staff_escalation(db, workflow_run: WorkflowRun, reason: str) -> WorkflowRun:
+    """Patient clicked 'talk to staff' from the needs_clarification popup.
+    Calls create_escalation directly - no LLM call, no ToolNode involved,
+    `db` is safe to use directly here (unlike continue_as_booking above)."""
+    escalation = create_escalation(db, str(workflow_run.id), reason)
+    full_state = dict(workflow_run.state)
+    full_state["escalation"] = escalation
+    workflow_run.status = WorkflowStatus.needs_review
+    workflow_run.current_step = "staff_escalation"
+    full_state["status"] = workflow_run.status.value
+    workflow_run.state = full_state
+    db.commit()
+    return workflow_run
+

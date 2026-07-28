@@ -1,7 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Staff Dashboard - AgentCare{% endblock %}
 {% block content %}
-<h1>Staff Dashboard — {{ user.name }}</h1>
-<p>Role: {{ user.role.value }}</p>
-<form method="post" action="/logout"><button type="submit">Log out</button></form>
+<h1 style="margin-top: 0;">Staff Dashboard — {{ user.name }}</h1>
+<p><strong>Role:</strong> {{ user.role.value }}</p>
+
+<h2>Requests Needing Staff Review</h2>
+
+{% if escalated_runs %}
+<table border="1" cellpadding="10" cellspacing="0" style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+    <thead>
+        <tr style="background-color: #ffebee;">
+            <th style="text-align: left;">Date</th>
+            <th style="text-align: left;">Workflow ID</th>
+            <th style="text-align: left;">Request Description</th>
+            <th style="text-align: left;">Escalation Reason</th>
+            <th style="text-align: center;">Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for run in escalated_runs %}
+        <tr>
+            <td>{{ run.created_at.strftime('%Y-%m-%d %H:%M') if run.created_at else 'Recent' }}</td>
+            <td><code>{{ run.id }}</code></td>
+            <td>{{ run.state.get('request_text', 'N/A') }}</td>
+            <td><strong style="color: #c62828;">{{ run.state.get('escalation', {}).get('reason', 'Review required') }}</strong></td>
+            <td style="text-align: center;"><span style="display: inline-block; padding: 4px 8px; border-radius: 4px; background-color: #ffcdd2; color: #b71c1c; font-size: 13px; font-weight: bold;">{{ run.status.value }}</span></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div style="padding: 20px; background-color: #f8f9fa; border-radius: 6px;">
+    <p style="margin: 0; font-size: 16px; color: #2e7d32;">✅ No requests currently require staff review.</p>
+</div>
+{% endif %}
 {% endblock %}

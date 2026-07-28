@@ -10,9 +10,11 @@ just written down in a plan.
 | 1. Foundation (Docker+Postgres, 11-table schema+Alembic, auth+RBAC, seed data) | ✅ Done | `docs/superpowers/plans/2026-07-22-foundation.md` |
 | 2. Core agent loop (Safety + Coordinator agents as private LangGraph subgraphs, 2-node parent graph, per-node checkpointing, audited tools) | ✅ Done — validated against real Groq API | `docs/superpowers/plans/2026-07-23-core-agent-loop.md` |
 | 3. Department Routing + Appointment agents | ✅ Done — 64/64 tests passing (real DB) | `docs/superpowers/plans/2026-07-25-routing-appointment-agents.md` |
-| 4. Document agent | ⬜ Spec done, plan being written by background subagent | `docs/superpowers/plans/2026-07-27-document-agent.md` (in progress) |
-| 5. Follow-up agent + staff escalation/reminder views | ⬜ Spec done, plan being written by background subagent | `docs/superpowers/plans/2026-07-27-followup-agent.md` (in progress) |
-| 6. UI polish, seed data realism, demo pass | ⬜ Not started | not yet written |
+| 4. Document agent | ✅ Done — 111/111 tests passing (real DB) | `docs/superpowers/plans/2026-07-27-document-agent.md` |
+| 4a. Intent branching + "ask when unclear" popup | ✅ Done — built by Antigravity/Gemini while Claude's session limit was exhausted, reviewed by Claude after the fact | `docs/superpowers/plans/2026-07-27-intent-branching-popup.md` |
+| 4b. Basic UI Navigation & Connectivity | ✅ Done | `docs/superpowers/plans/2026-07-28-basic-ui-navigation.md` |
+| 5. Follow-up agent + staff escalation/reminder views | ⬜ Spec done, plan written | `docs/superpowers/plans/2026-07-27-followup-agent.md` |
+| 6. UI polish, seed data realism, demo pass | ⬜ In progress | `docs/superpowers/plans/2026-07-28-basic-ui-navigation.md` |
 
 **Time budget update (2026-07-27, later in the day): at most 12 hours
 remain for all remaining work.** This cut the achievable scope hard.
@@ -54,6 +56,23 @@ entirely (drops the `Reminder.note` column, the per-type dedup logic, and
 trim before execution, not written yet. (5) Reschedule/cancel plain
 routes, only if time remains — small, tool already supports it. Nothing
 beyond this — no visual polish, no doctor-search, no other extensions.
+
+**Gap found during live manual testing (2026-07-28), fixed same day:**
+clicking "Book an appointment" from the needs_clarification popup used to
+call `continue_as_booking` immediately, which re-fed the *original*
+ambiguous `request_text` into Routing — if that text had nothing routable
+in it (e.g. "what are your visiting hours"), Routing correctly failed and
+escalated, but the patient never got a chance to actually say what the
+appointment was for. Fixed with a new intermediate step:
+`WorkflowStatus.needs_appointment_reason` (migration `a1b2c3d4e5f6`).
+Clicking "Book an appointment" now lands there first, showing real active
+department buttons (skips Routing's LLM entirely if one is clicked —
+`continue_as_booking_with_department`, deterministic, no guessing) plus a
+free-text fallback (`continue_as_booking` gained an `override_request_text`
+param, used instead of the stale original text). 156/156 tests passing,
+migration verified. This was NOT part of either plan above — found by
+actually using the app, not by re-reading the code, consistent with how
+most real bugs surfaced this whole session.
 
 Two specs (Document, Follow-up) were cross-checked twice by the user
 directly against the running code before any implementation started, and

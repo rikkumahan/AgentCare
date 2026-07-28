@@ -1,15 +1,51 @@
 {% extends "base.html" %}
 {% block title %}Request Status - AgentCare{% endblock %}
 {% block content %}
-<h1>Request Status</h1>
-<p>Status: {{ workflow_run.status.value }}</p>
-<p>Current step: {{ workflow_run.current_step }}</p>
-<ul>
-    <li>Intent: {{ workflow_run.state.get("intent") }}</li>
-    <li>Department: {{ workflow_run.state.get("department_id") }}</li>
-    <li>Appointment: {{ workflow_run.state.get("appointment_id") }}</li>
-    <li>Documents: {{ workflow_run.state.get("document_ids") }}</li>
-    <li>Escalation: {{ workflow_run.state.get("escalation") }}</li>
-</ul>
-<a href="/requests/new">Submit another request</a>
+<div style="margin-bottom: 16px;">
+    <a href="/dashboard" style="color: #0066cc; text-decoration: none; font-weight: 500;">← Back to Dashboard</a>
+</div>
+<h1 style="margin-top: 0;">Request Status</h1>
+<p>{{ patient_message }}</p>
+{% if workflow_run.status.value == "needs_clarification" %}
+<div style="margin-top: 16px; margin-bottom: 24px; display: flex; gap: 12px;">
+    <form method="post" action="/requests/{{ workflow_run.id }}/clarify" style="display:inline">
+        <input type="hidden" name="choice" value="book_appointment">
+        <button type="submit" style="padding: 10px 18px; background-color: #0066cc; color: white; border: none; border-radius: 4px; font-weight: 500; cursor: pointer;">Book an appointment</button>
+    </form>
+    <form method="post" action="/requests/{{ workflow_run.id }}/clarify" style="display:inline">
+        <input type="hidden" name="choice" value="staff">
+        <button type="submit" style="padding: 10px 18px; background-color: #6c757d; color: white; border: none; border-radius: 4px; font-weight: 500; cursor: pointer;">Talk to hospital staff</button>
+    </form>
+</div>
+{% endif %}
+{% if workflow_run.status.value == "needs_appointment_reason" %}
+<div style="margin-top: 16px; margin-bottom: 24px;">
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">
+        {% for department in departments %}
+        <form method="post" action="/requests/{{ workflow_run.id }}/select-reason" style="display:inline">
+            <input type="hidden" name="department_id" value="{{ department.id }}">
+            <button type="submit" style="padding: 10px 16px; background-color: #0066cc; color: white; border: none; border-radius: 4px; font-weight: 500; cursor: pointer;">{{ department.name }}</button>
+        </form>
+        {% endfor %}
+    </div>
+    <form method="post" action="/requests/{{ workflow_run.id }}/select-reason" style="display:flex; gap: 8px;">
+        <input type="text" name="reason_text" placeholder="Something else - describe it" style="flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px;">
+        <button type="submit" style="padding: 10px 18px; background-color: #6c757d; color: white; border: none; border-radius: 4px; font-weight: 500; cursor: pointer;">Continue</button>
+    </form>
+</div>
+{% endif %}
+{% if workflow_run.status.value == "needs_slot_selection" %}
+<div style="margin-top: 16px; margin-bottom: 24px; display: flex; flex-direction: column; gap: 10px;">
+    {% for slot in slots %}
+    <form method="post" action="/requests/{{ workflow_run.id }}/select-slot" style="display:inline">
+        <input type="hidden" name="slot_id" value="{{ slot.slot_id }}">
+        <button type="submit" style="width: 100%; text-align: left; padding: 12px 16px; background-color: white; border: 1px solid #0066cc; color: #0066cc; border-radius: 4px; font-weight: 500; cursor: pointer;">{{ slot.doctor_name }} — {{ slot.formatted_time }}</button>
+    </form>
+    {% endfor %}
+</div>
+{% endif %}
+<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #eee; display: flex; gap: 16px;">
+    <a href="/requests/new" style="padding: 8px 16px; background-color: #0066cc; color: white; text-decoration: none; border-radius: 4px;">Submit another request</a>
+    <a href="/dashboard" style="padding: 8px 16px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 4px;">Return to Dashboard</a>
+</div>
 {% endblock %}

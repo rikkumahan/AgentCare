@@ -143,6 +143,9 @@ class WorkflowStatus(str, enum.Enum):
     completed = "completed"
     failed = "failed"
     needs_review = "needs_review"
+    needs_clarification = "needs_clarification"
+    needs_appointment_reason = "needs_appointment_reason"
+    needs_slot_selection = "needs_slot_selection"
 
 
 class WorkflowRun(Base):

@@ -57,12 +57,25 @@ def test_routing_finalize_node_sets_department_name():
     assert update == {"department_name": "Cardiology"}
 
 
-def test_routing_finalize_node_returns_none_for_unmatched():
+def test_routing_finalize_node_returns_unmatched_sentinel():
+    # "UNMATCHED" (patient described something specific, nothing fit) and
+    # "NEEDS_MORE_INFO" (patient never said what kind of care they need at
+    # all) are both preserved as distinct sentinel strings now, not
+    # collapsed to None - routing_agent_node needs to tell them apart to
+    # decide between escalating and asking.
     state = _routing_state(messages=[ai_message_text("UNMATCHED")])
 
     update = routing_finalize_node(state, config={"configurable": {}})
 
-    assert update == {"department_name": None}
+    assert update == {"department_name": "UNMATCHED"}
+
+
+def test_routing_finalize_node_returns_needs_more_info_sentinel():
+    state = _routing_state(messages=[ai_message_text("NEEDS_MORE_INFO")])
+
+    update = routing_finalize_node(state, config={"configurable": {}})
+
+    assert update == {"department_name": "NEEDS_MORE_INFO"}
 
 
 def test_routing_agent_node_resolves_department_id_by_name(monkeypatch, db_session):
@@ -128,12 +141,42 @@ def test_routing_agent_node_escalates_when_unmatched(monkeypatch, db_session):
     assert "dermatologist" in escalation.reason
 
 
+def test_routing_agent_node_asks_instead_of_guessing_when_no_specialty_given(monkeypatch, db_session):
+    # Regression, found via live manual testing against the real Groq API:
+    # "I'm here to book an appointment" (no symptom, condition, or
+    # department named at all) was silently landing on "General Medicine"
+    # every time - not a real match, just the least-wrong-sounding guess.
+    # NEEDS_MORE_INFO must trigger needs_appointment_reason instead of
+    # picking a department or escalating.
+    workflow_run = make_workflow_run(db_session)
+    make_department(db_session, name=f"General Medicine {uuid.uuid4().hex[:8]}")
+    fake_model = FakeToolCallingModel(
+        [
+            ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "appointment"}),
+            ai_message_text("NEEDS_MORE_INFO"),
+        ]
+    )
+    monkeypatch.setattr("app.agents.routing.get_llm", lambda: fake_model)
+
+    state = workflow_state(
+        workflow_run_id=str(workflow_run.id),
+        request_text="I'm here to book an appointment",
+    )
+    update = routing_agent_node(state, config={"configurable": {"db": db_session}})
+
+    assert update["department_id"] is None
+    assert update.get("needs_appointment_reason") is True
+    assert "escalation" not in update
+    assert db_session.query(Escalation).filter(Escalation.workflow_run_id == workflow_run.id).count() == 0
+
+
 def test_routing_agent_node_escalates_when_name_not_found_in_db(monkeypatch, db_session):
     workflow_run = make_workflow_run(db_session)
     fake_model = FakeToolCallingModel(
         [
             ai_message_with_tool_call("lookup_departments_tool", {"query_hint": "x"}),
-            ai_message_text("Neurology"),
+            ai_message_text("Phrenology"),
+
         ]
     )
     monkeypatch.setattr("app.agents.routing.get_llm", lambda: fake_model)

@@ -15,3 +15,6 @@ class WorkflowState(TypedDict):
     reminder_ids: list[str]
     escalation: dict | None
     status: str
+    needs_clarification: bool
+    needs_appointment_reason: bool
+

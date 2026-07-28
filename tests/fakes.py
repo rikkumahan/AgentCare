@@ -126,6 +126,8 @@ def workflow_state(**overrides) -> dict:
         "reminder_ids": [],
         "escalation": None,
         "status": "running",
+        "needs_clarification": False,
+        "needs_appointment_reason": False,
     }
     state.update(overrides)
     return state

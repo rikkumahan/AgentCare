@@ -8,7 +8,7 @@ from langgraph.prebuilt import InjectedState
 from sqlalchemy.orm import Session
 
 from app.audit import audited
-from app.models import Appointment, AppointmentSlot, AppointmentStatus, Doctor, SlotStatus
+from app.models import Appointment, AppointmentSlot, AppointmentStatus, Department, Doctor, SlotStatus
 
 
 def _appointment_dict(appointment: Appointment, slot: AppointmentSlot | None) -> dict:
@@ -20,6 +20,25 @@ def _appointment_dict(appointment: Appointment, slot: AppointmentSlot | None) ->
         "status": appointment.status.value,
         "start_time": slot.start_time.isoformat() if slot else None,
         "end_time": slot.end_time.isoformat() if slot else None,
+    }
+
+
+def appointment_display_details(db: Session, appointment_id: str) -> dict | None:
+    """Real DB lookup: doctor name, department name, formatted time -
+    shared by every place that needs to show a booked appointment (the
+    dashboard's request list wants a compact line, the request-status page
+    wants a full sentence) so the query itself isn't duplicated per caller,
+    even though the wording each builds from it differs."""
+    appointment = db.query(Appointment).filter(Appointment.id == uuid.UUID(appointment_id)).first()
+    if appointment is None:
+        return None
+    doctor = db.query(Doctor).filter(Doctor.id == appointment.doctor_id).first()
+    department = db.query(Department).filter(Department.id == doctor.department_id).first()
+    slot = db.query(AppointmentSlot).filter(AppointmentSlot.id == appointment.slot_id).first()
+    return {
+        "doctor_name": doctor.name,
+        "department_name": department.name,
+        "formatted_time": slot.start_time.strftime("%B %d, %Y at %I:%M %p"),
     }
 
 

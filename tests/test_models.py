@@ -1,7 +1,12 @@
 import uuid
 
-from app.models import Appointment, AppointmentStatus, Department, Doctor
+from app.models import Appointment, AppointmentStatus, Department, Doctor, WorkflowStatus
 from tests.fakes import make_appointment, make_appointment_slot, make_doctor, make_patient_profile
+
+
+def test_workflow_status_has_needs_clarification_value():
+    assert WorkflowStatus.needs_clarification.value == "needs_clarification"
+
 
 
 def test_create_department_and_doctor(db_session):
