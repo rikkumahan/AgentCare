@@ -11,6 +11,10 @@ collection — while keeping every medical decision under human supervision.
 Reminders and automated follow-up are designed but not yet built (see
 Architecture below).
 
+## Demo
+
+[![AgentCare demo video](https://img.youtube.com/vi/md7nzJh95NM/maxresdefault.jpg)](https://youtu.be/md7nzJh95NM)
+
 ## What it does
 
 A patient submits a free-text request, e.g.:
